@@ -37,7 +37,7 @@ npm run dev
 ### 배포 예시
 
 - 프론트: Vercel (`frontend/`), 환경변수 `NEXT_PUBLIC_API_URL`
-- API: Railway / Render / Fly.io (`backend/`), Turso·CORS 설정
+- API: Render (`backend/`, `render.yaml` Blueprint 제공), Turso·CORS 설정
 
 ## 엑셀 형식
 
