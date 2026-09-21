@@ -8,4 +8,8 @@ env/
 *.xlsx
 *.xls
 *.csv
-*.log
+*.logbackend/.venv/
+backend/.env
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
