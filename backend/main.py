@@ -227,15 +227,22 @@ def list_senders():
     return db.list_senders()
 
 
+class SenderBody(BaseModel):
+    email: EmailStr
+    display_name: str = ""
+    is_admin: bool = False
+    is_active: bool = True
+
+
 @app.post("/api/senders")
-def upsert_sender(
-    email: str = Form(...),
-    display_name: str = Form(""),
-    is_admin: bool = Form(False),
-    is_active: bool = Form(True),
-):
-    db.upsert_sender(email, display_name, is_admin, is_active)
+def upsert_sender(body: SenderBody):
+    db.upsert_sender(body.email, body.display_name, body.is_admin, body.is_active)
     return {"ok": True}
+
+
+class PrefsBody(BaseModel):
+    email: EmailStr
+    prefs: dict[str, Any] = Field(default_factory=dict)
 
 
 @app.get("/api/prefs")
@@ -244,8 +251,8 @@ def get_prefs(email: str):
 
 
 @app.post("/api/prefs")
-def save_prefs(email: str, prefs: dict[str, Any]):
-    db.save_sender_prefs(email, prefs)
+def save_prefs(body: PrefsBody):
+    db.save_sender_prefs(body.email, body.prefs)
     return {"ok": True}
 
 

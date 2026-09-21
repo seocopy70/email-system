@@ -49,3 +49,6 @@ npm run dev
 pip install -r requirements.txt
 streamlit run auto_em.py
 ```
+
+자세한 배포: [DEPLOY.md](./DEPLOY.md)
+

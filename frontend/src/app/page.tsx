@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import * as XLSX from "xlsx";
-import { api, AuthUser } from "@/lib/api";
+import { api, AuthUser, fileToBase64 } from "@/lib/api";
 
 type BodyMode = "html" | "text" | "both";
 type FooterMode = "text" | "image" | "none";
+type BottomTab = "list" | "stats" | "logs" | "admin";
 
 const SAMPLE = {
   회사명: "샘플기업",
@@ -40,14 +41,28 @@ export default function Home() {
   const [formUrl, setFormUrl] = useState("");
   const [includeForm, setIncludeForm] = useState(false);
 
+  const [bodyImageB64, setBodyImageB64] = useState<string | null>(null);
+  const [footerImageB64, setFooterImageB64] = useState<string | null>(null);
+  const [imageWidth, setImageWidth] = useState(80);
+  const [footerImageWidth, setFooterImageWidth] = useState(60);
+  const [useBodyImage, setUseBodyImage] = useState(false);
+
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewSubj, setPreviewSubj] = useState("");
+  const [previewPick, setPreviewPick] = useState("샘플");
+
   const [recipients, setRecipients] = useState<any[]>([]);
   const [statusMap, setStatusMap] = useState<Record<string, any>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [sendResult, setSendResult] = useState<string>("");
+  const [sendResult, setSendResult] = useState("");
   const [saveTmplName, setSaveTmplName] = useState("");
   const [showSave, setShowSave] = useState(false);
+
+  const [bottomTab, setBottomTab] = useState<BottomTab>("list");
+  const [stats, setStats] = useState<any>(null);
+  const [logs, setLogs] = useState<any[]>([]);
+  const [senders, setSenders] = useState<any[]>([]);
+  const [newSender, setNewSender] = useState({ email: "", display_name: "", is_admin: false, is_active: true });
 
   const loadMeta = useCallback(async () => {
     const m = await api.meta();
@@ -75,9 +90,26 @@ export default function Home() {
     if (!user) return;
     refreshTopics().catch(console.error);
     api.templates(user.email).then(setTemplates).catch(console.error);
+    api
+      .getPrefs(user.email)
+      .then((p) => {
+        if (p.footer_text) setFooterText(p.footer_text);
+        if (p.footer_mode === "text" || p.footer_mode === "image" || p.footer_mode === "none") setFooterMode(p.footer_mode);
+        if (p.footer_image_b64) {
+          setFooterImageB64(p.footer_image_b64);
+          if (p.use_footer_image) setFooterMode("image");
+        }
+        if (p.footer_image_width) setFooterImageWidth(Number(p.footer_image_width) || 60);
+      })
+      .catch(() => {});
   }, [user, refreshTopics]);
 
-  // 실시간 미리보기 (디바운스) — 전체 페이지 리로드 없음
+  // 미리보기 대상 row
+  const previewRow =
+    previewPick === "샘플"
+      ? SAMPLE
+      : recipients.find((r) => `${r.회사명} (${r.이메일})` === previewPick) || SAMPLE;
+
   useEffect(() => {
     if (!user) return;
     const t = setTimeout(() => {
@@ -92,16 +124,52 @@ export default function Home() {
           footer_text: footerText,
           form_url: formUrl,
           include_form: includeForm,
-          row: SAMPLE,
+          body_image_b64: useBodyImage ? bodyImageB64 : null,
+          footer_image_b64: footerMode === "image" ? footerImageB64 : null,
+          image_width_pct: imageWidth,
+          footer_image_width_pct: footerImageWidth,
+          row: previewRow,
         })
         .then((r) => {
           setPreviewSubj(r.subject);
           setPreviewHtml(r.html);
         })
         .catch(() => {});
-    }, 250);
+    }, 280);
     return () => clearTimeout(t);
-  }, [user, subject, plainBody, htmlBody, bodyMode, footerMode, footerText, formUrl, includeForm]);
+  }, [
+    user,
+    subject,
+    plainBody,
+    htmlBody,
+    bodyMode,
+    footerMode,
+    footerText,
+    formUrl,
+    includeForm,
+    bodyImageB64,
+    footerImageB64,
+    useBodyImage,
+    imageWidth,
+    footerImageWidth,
+    previewPick,
+    recipients,
+  ]);
+
+  useEffect(() => {
+    if (!user || bottomTab !== "stats") return;
+    api.stats().then(setStats).catch(console.error);
+  }, [user, bottomTab]);
+
+  useEffect(() => {
+    if (!user || !topicId || bottomTab !== "logs") return;
+    api.topicLogs(topicId).then(setLogs).catch(console.error);
+  }, [user, topicId, bottomTab]);
+
+  useEffect(() => {
+    if (!user || !user.is_admin || bottomTab !== "admin") return;
+    api.senders().then(setSenders).catch(console.error);
+  }, [user, bottomTab]);
 
   async function doLogin() {
     setLoginErr("");
@@ -109,13 +177,17 @@ export default function Home() {
     try {
       const u = await api.login(loginEmail, password, loginName || undefined);
       setUser(u);
-      // 비밀번호는 발송 시에만 메모리에 유지 (로컬스토리지 저장 안 함)
       sessionStorage.setItem("em_pw", password);
     } catch (e: any) {
       setLoginErr(e.message || "로그인 실패");
     } finally {
       setBusy(false);
     }
+  }
+
+  function logout() {
+    setUser(null);
+    sessionStorage.removeItem("em_pw");
   }
 
   function applyPreset(name: string) {
@@ -141,6 +213,43 @@ export default function Home() {
     if (field === "plain") setPlainBody((s) => s + tag);
     if (field === "html") setHtmlBody((s) => s + tag);
     if (field === "footer") setFooterText((s) => s + tag);
+  }
+
+  async function onBodyImage(file: File | null) {
+    if (!file) {
+      setBodyImageB64(null);
+      return;
+    }
+    const b64 = await fileToBase64(file);
+    setBodyImageB64(b64);
+    setUseBodyImage(true);
+    // HTML 모드: data-URI로 본문에 삽입
+    if (bodyMode === "html" || bodyMode === "both") {
+      const mime = file.type || "image/png";
+      const imgTag = `<img src="data:${mime};base64,${b64}" style="max-width:${imageWidth}%;height:auto;display:block;margin:18px auto;" />`;
+      setHtmlBody((h) => (h.includes("{이미지}") ? h.replace("{이미지}", imgTag) : h + "\n" + imgTag));
+    }
+  }
+
+  async function onFooterImage(file: File | null) {
+    if (!file) {
+      setFooterImageB64(null);
+      return;
+    }
+    setFooterImageB64(await fileToBase64(file));
+  }
+
+  async function saveMyPrefs() {
+    if (!user) return;
+    await api.savePrefs(user.email, {
+      footer_mode: footerMode,
+      footer_text: footerText,
+      footer_image_b64: footerImageB64,
+      footer_image_width: footerImageWidth,
+      use_footer_image: footerMode === "image",
+      body_mode: bodyMode,
+    });
+    alert("기본 설정을 저장했습니다.");
   }
 
   async function addTopic() {
@@ -199,6 +308,7 @@ export default function Home() {
         .map((r) => String(r.recipient_id))
     );
     setSelected(selectable);
+    setBottomTab("list");
   }
 
   async function doSend() {
@@ -234,18 +344,29 @@ export default function Home() {
         footer_text: footerText,
         form_url: formUrl,
         include_form: includeForm,
+        body_image_b64: useBodyImage ? bodyImageB64 : null,
+        footer_image_b64: footerMode === "image" ? footerImageB64 : null,
+        image_width_pct: imageWidth,
+        footer_image_width_pct: footerImageWidth,
         targets,
         delay_sec: 2,
       });
       setSendResult(`성공 ${r.sent} · 건너뜀 ${r.skipped} · 실패 ${r.failed}`);
       if (r.errors?.length) setSendResult((s) => s + "\n" + r.errors.join("\n"));
-      const st = await api.topicStatus(topicId);
-      setStatusMap(st);
+      setStatusMap(await api.topicStatus(topicId));
+      if (bottomTab === "logs") setLogs(await api.topicLogs(topicId));
     } catch (e: any) {
       setSendResult(e.message || "발송 오류");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveSender() {
+    if (!newSender.email.trim()) return;
+    await api.upsertSender(newSender);
+    setNewSender({ email: "", display_name: "", is_admin: false, is_active: true });
+    setSenders(await api.senders());
   }
 
   if (!user) {
@@ -270,35 +391,36 @@ export default function Home() {
 
   const presetNames = Object.keys(presets);
   const userTmplNames = templates.map((t) => t.name);
+  const previewOpts = ["샘플", ...recipients.map((r) => `${r.회사명} (${r.이메일})`)];
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen pb-10">
       <header className="bg-gradient-to-r from-ink-900 to-ink-700 text-white px-5 py-3.5">
         <div className="max-w-[1400px] mx-auto flex items-center justify-between gap-4">
           <div>
             <h1 className="text-base font-semibold">기업 이메일 발송 시스템</h1>
             <p className="text-xs text-white/70">맞춤 메일 · 중복 발송 방지 · 다중 계정</p>
           </div>
-          <div className="text-right text-sm">
-            <div className="font-medium">{user.name}</div>
-            <div className="text-white/70 text-xs">
-              {user.email} · 오늘 {user.sent_today}/{user.daily_limit}
+          <div className="flex items-center gap-4 text-sm">
+            <div className="text-right">
+              <div className="font-medium">{user.name}</div>
+              <div className="text-white/70 text-xs">
+                {user.email} · 오늘 {user.sent_today}/{user.daily_limit}
+              </div>
             </div>
+            <button className="btn-ghost !bg-white/10 !text-white hover:!bg-white/20" onClick={logout}>
+              로그아웃
+            </button>
           </div>
         </div>
       </header>
 
       <main className="max-w-[1400px] mx-auto p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* 좌: 편집 */}
         <section className="space-y-3">
           <div className="card p-4">
             <div className="card-title">발송 주제</div>
             <div className="flex gap-2">
-              <select
-                className="input"
-                value={topicId ?? ""}
-                onChange={(e) => setTopicId(Number(e.target.value))}
-              >
+              <select className="input" value={topicId ?? ""} onChange={(e) => setTopicId(Number(e.target.value))}>
                 {topics.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
@@ -316,7 +438,12 @@ export default function Home() {
           </div>
 
           <div className="card p-4 space-y-3">
-            <div className="card-title">메일 작성</div>
+            <div className="flex items-center justify-between">
+              <div className="card-title mb-0">메일 작성</div>
+              <button type="button" className="text-xs text-ink-500 hover:text-ink-900" onClick={saveMyPrefs}>
+                내 기본설정 저장
+              </button>
+            </div>
             <div className="flex gap-2">
               <select
                 className="input"
@@ -351,9 +478,7 @@ export default function Home() {
               </div>
             )}
 
-            <div className="flex gap-2 items-center">
-              <input className="input" placeholder="제목" value={subject} onChange={(e) => setSubject(e.target.value)} />
-            </div>
+            <input className="input" placeholder="제목" value={subject} onChange={(e) => setSubject(e.target.value)} />
             <div className="flex flex-wrap gap-1.5">
               {varTags.map((v) => (
                 <button key={v.tag} type="button" className="chip" onClick={() => insertTag("subject", v.tag)}>
@@ -398,7 +523,7 @@ export default function Home() {
                         </button>
                       ))}
                     </div>
-                    <textarea className="input min-h-[140px] font-mono text-xs" value={plainBody} onChange={(e) => setPlainBody(e.target.value)} />
+                    <textarea className="input min-h-[120px] font-mono text-xs" value={plainBody} onChange={(e) => setPlainBody(e.target.value)} />
                   </>
                 )}
                 {(bodyMode === "html" || bodyMode === "both") && (
@@ -410,8 +535,32 @@ export default function Home() {
                         </button>
                       ))}
                     </div>
-                    <textarea className="input min-h-[160px] font-mono text-xs" value={htmlBody} onChange={(e) => setHtmlBody(e.target.value)} />
+                    <textarea className="input min-h-[140px] font-mono text-xs" value={htmlBody} onChange={(e) => setHtmlBody(e.target.value)} />
                   </>
+                )}
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={useBodyImage} onChange={(e) => setUseBodyImage(e.target.checked)} />
+                  본문 이미지 사용
+                </label>
+                {useBodyImage && (
+                  <div className="space-y-2 pl-1">
+                    <input type="file" accept="image/*" onChange={(e) => onBodyImage(e.target.files?.[0] || null)} />
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-ink-500">너비</span>
+                      <input
+                        type="range"
+                        min={20}
+                        max={100}
+                        step={5}
+                        value={imageWidth}
+                        onChange={(e) => setImageWidth(Number(e.target.value))}
+                      />
+                      <span>{imageWidth}%</span>
+                    </div>
+                    {bodyImageB64 && (
+                      <img src={`data:image/png;base64,${bodyImageB64}`} alt="body" className="max-h-32 rounded border border-ink-200" />
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -432,14 +581,48 @@ export default function Home() {
                   ))}
                 </div>
                 {footerMode !== "none" && (
-                  <textarea className="input min-h-[80px]" value={footerText} onChange={(e) => setFooterText(e.target.value)} placeholder="푸터 문구" />
+                  <textarea
+                    className="input min-h-[72px]"
+                    value={footerText}
+                    onChange={(e) => setFooterText(e.target.value)}
+                    placeholder="푸터 문구"
+                  />
+                )}
+                {footerMode === "image" && (
+                  <div className="space-y-2">
+                    <input type="file" accept="image/*" onChange={(e) => onFooterImage(e.target.files?.[0] || null)} />
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-ink-500">너비</span>
+                      <input
+                        type="range"
+                        min={20}
+                        max={100}
+                        step={5}
+                        value={footerImageWidth}
+                        onChange={(e) => setFooterImageWidth(Number(e.target.value))}
+                      />
+                      <span>{footerImageWidth}%</span>
+                    </div>
+                    {footerImageB64 && (
+                      <img
+                        src={`data:image/png;base64,${footerImageB64}`}
+                        alt="footer"
+                        className="max-h-28 rounded border border-ink-200"
+                      />
+                    )}
+                  </div>
                 )}
               </div>
             )}
 
             {activeTab === "form" && (
               <div className="space-y-2">
-                <input className="input" placeholder="Google Forms 링크" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} />
+                <input
+                  className="input"
+                  placeholder="Google Forms 링크"
+                  value={formUrl}
+                  onChange={(e) => setFormUrl(e.target.value)}
+                />
                 <label className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={includeForm} onChange={(e) => setIncludeForm(e.target.checked)} />
                   메일에 설문 버튼 포함
@@ -449,72 +632,220 @@ export default function Home() {
           </div>
         </section>
 
-        {/* 우: 미리보기 */}
-        <section className="card p-4 lg:sticky lg:top-4 h-fit">
+        <section className="card p-4 lg:sticky lg:top-4 h-fit space-y-2">
           <div className="card-title">실시간 미리보기</div>
-          <div className="text-xs text-ink-500 mb-2 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2">
+          <select className="input text-sm" value={previewPick} onChange={(e) => setPreviewPick(e.target.value)}>
+            {previewOpts.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+          <div className="text-xs text-ink-500 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2">
             <b>제목</b> {previewSubj || "—"}
-            <br />
-            <b>대상</b> 샘플 데이터
           </div>
-          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden" style={{ height: 620 }}>
-            <iframe title="preview" className="w-full h-full bg-white" srcDoc={previewHtml || "<p style='padding:16px;color:#888'>미리보기</p>"} />
+          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden" style={{ height: 580 }}>
+            <iframe
+              title="preview"
+              className="w-full h-full bg-white"
+              srcDoc={previewHtml || "<p style='padding:16px;color:#888'>미리보기</p>"}
+            />
           </div>
         </section>
 
-        {/* 하단: 수신·발송 */}
         <section className="card p-4 lg:col-span-2 space-y-3">
-          <div className="card-title">수신 대상 · 발송</div>
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={(e) => e.target.files?.[0] && onExcel(e.target.files[0])}
-          />
-          {recipients.length > 0 && (
-            <div className="overflow-auto max-h-64 border border-ink-200 rounded-lg">
+          <div className="flex flex-wrap gap-1 border-b border-ink-200 pb-1">
+            {(
+              [
+                ["list", "발송 명단"],
+                ["stats", "현황"],
+                ["logs", "발송 내역"],
+                ...(user.is_admin ? ([["admin", "발신 계정"]] as const) : []),
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                className={`px-3 py-2 text-sm ${bottomTab === k ? "border-b-2 border-ink-900 font-medium" : "text-ink-500"}`}
+                onClick={() => setBottomTab(k as BottomTab)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {bottomTab === "list" && (
+            <div className="space-y-3">
+              <input type="file" accept=".xlsx,.xls" onChange={(e) => e.target.files?.[0] && onExcel(e.target.files[0])} />
+              {recipients.length > 0 && (
+                <>
+                  <div className="overflow-auto max-h-64 border border-ink-200 rounded-lg">
+                    <table className="w-full text-sm">
+                      <thead className="bg-ink-50 sticky top-0">
+                        <tr>
+                          <th className="p-2 text-left w-12">선택</th>
+                          <th className="p-2 text-left">회사</th>
+                          <th className="p-2 text-left">이메일</th>
+                          <th className="p-2 text-left">상태</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {recipients.map((r) => {
+                          const log = statusMap[String(r.recipient_id)] || statusMap[r.recipient_id];
+                          const st = log?.status || "none";
+                          const label =
+                            st === "sent" ? "발송완료" : st === "failed" ? "실패" : st === "pending" ? "발송중" : "미발송";
+                          return (
+                            <tr key={r.recipient_id} className="border-t border-ink-100">
+                              <td className="p-2">
+                                <input
+                                  type="checkbox"
+                                  checked={selected.has(String(r.recipient_id))}
+                                  onChange={(e) => {
+                                    const next = new Set(selected);
+                                    if (e.target.checked) next.add(String(r.recipient_id));
+                                    else next.delete(String(r.recipient_id));
+                                    setSelected(next);
+                                  }}
+                                />
+                              </td>
+                              <td className="p-2">{r.회사명}</td>
+                              <td className="p-2">{r.이메일}</td>
+                              <td className="p-2 text-ink-500">{label}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button className="btn-primary" disabled={busy || !selected.size} onClick={doSend}>
+                      {busy ? "발송 중…" : `선택 ${selected.size}건 발송`}
+                    </button>
+                    {sendResult && <pre className="text-xs text-ink-700 whitespace-pre-wrap">{sendResult}</pre>}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {bottomTab === "stats" && (
+            <div className="space-y-3 text-sm">
+              {!stats ? (
+                <p className="text-ink-500">불러오는 중…</p>
+              ) : (
+                <>
+                  <p>
+                    DB 수신자 수: <b>{stats.recipients}</b>
+                  </p>
+                  <div>
+                    <div className="font-medium mb-1">오늘 계정별 발송</div>
+                    <ul className="list-disc pl-5 text-ink-700">
+                      {Object.entries(stats.sent_today || {}).map(([k, v]) => (
+                        <li key={k}>
+                          {k}: {String(v)}
+                        </li>
+                      ))}
+                      {!Object.keys(stats.sent_today || {}).length && <li>없음</li>}
+                    </ul>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {bottomTab === "logs" && (
+            <div className="overflow-auto max-h-80 border border-ink-200 rounded-lg">
               <table className="w-full text-sm">
                 <thead className="bg-ink-50 sticky top-0">
                   <tr>
-                    <th className="p-2 text-left">선택</th>
-                    <th className="p-2 text-left">회사</th>
-                    <th className="p-2 text-left">이메일</th>
+                    <th className="p-2 text-left">시각</th>
+                    <th className="p-2 text-left">발신</th>
+                    <th className="p-2 text-left">수신</th>
                     <th className="p-2 text-left">상태</th>
+                    <th className="p-2 text-left">제목</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {recipients.map((r) => {
-                    const log = statusMap[String(r.recipient_id)] || statusMap[r.recipient_id];
-                    const st = log?.status || "none";
-                    return (
-                      <tr key={r.recipient_id} className="border-t border-ink-100">
-                        <td className="p-2">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(String(r.recipient_id))}
-                            onChange={(e) => {
-                              const next = new Set(selected);
-                              if (e.target.checked) next.add(String(r.recipient_id));
-                              else next.delete(String(r.recipient_id));
-                              setSelected(next);
-                            }}
-                          />
-                        </td>
-                        <td className="p-2">{r.회사명}</td>
-                        <td className="p-2">{r.이메일}</td>
-                        <td className="p-2 text-ink-500">{st === "sent" ? "발송완료" : st === "failed" ? "실패" : st === "pending" ? "발송중" : "미발송"}</td>
-                      </tr>
-                    );
-                  })}
+                  {logs.map((d) => (
+                    <tr key={d.id} className="border-t border-ink-100">
+                      <td className="p-2 whitespace-nowrap text-xs">{d.sent_at || d.claimed_at || "—"}</td>
+                      <td className="p-2">{d.sender_name || d.sender_email}</td>
+                      <td className="p-2">{d.recipients?.company || d.recipients?.email}</td>
+                      <td className="p-2">{d.status}</td>
+                      <td className="p-2 truncate max-w-[200px]">{d.subject}</td>
+                    </tr>
+                  ))}
+                  {!logs.length && (
+                    <tr>
+                      <td colSpan={5} className="p-4 text-ink-500 text-center">
+                        내역 없음 (주제 선택 후 확인)
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
           )}
-          <div className="flex items-center gap-3">
-            <button className="btn-primary" disabled={busy || !recipients.length} onClick={doSend}>
-              {busy ? "발송 중…" : `선택 ${selected.size}건 발송`}
-            </button>
-            {sendResult && <pre className="text-xs text-ink-700 whitespace-pre-wrap">{sendResult}</pre>}
-          </div>
+
+          {bottomTab === "admin" && user.is_admin && (
+            <div className="space-y-3">
+              <div className="overflow-auto max-h-48 border border-ink-200 rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-ink-50">
+                    <tr>
+                      <th className="p-2 text-left">이메일</th>
+                      <th className="p-2 text-left">이름</th>
+                      <th className="p-2 text-left">관리자</th>
+                      <th className="p-2 text-left">활성</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {senders.map((s) => (
+                      <tr key={s.email} className="border-t border-ink-100">
+                        <td className="p-2">{s.email}</td>
+                        <td className="p-2">{s.display_name}</td>
+                        <td className="p-2">{s.is_admin ? "Y" : ""}</td>
+                        <td className="p-2">{s.is_active ? "Y" : "N"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  className="input"
+                  placeholder="Gmail"
+                  value={newSender.email}
+                  onChange={(e) => setNewSender({ ...newSender, email: e.target.value })}
+                />
+                <input
+                  className="input"
+                  placeholder="표시 이름"
+                  value={newSender.display_name}
+                  onChange={(e) => setNewSender({ ...newSender, display_name: e.target.value })}
+                />
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={newSender.is_admin}
+                    onChange={(e) => setNewSender({ ...newSender, is_admin: e.target.checked })}
+                  />
+                  관리자
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={newSender.is_active}
+                    onChange={(e) => setNewSender({ ...newSender, is_active: e.target.checked })}
+                  />
+                  활성
+                </label>
+              </div>
+              <button className="btn-primary" onClick={saveSender}>
+                등록 / 수정
+              </button>
+            </div>
+          )}
         </section>
       </main>
     </div>
