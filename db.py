@@ -119,10 +119,11 @@ _SCHEMA = [
         created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     )""",
     """CREATE TABLE IF NOT EXISTS topics (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        name       TEXT NOT NULL UNIQUE,
-        created_by TEXT,
-        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        name           TEXT NOT NULL UNIQUE,
+        created_by     TEXT,
+        default_preset TEXT,
+        created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     )""",
     """CREATE TABLE IF NOT EXISTS recipients (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,8 +149,26 @@ _SCHEMA = [
         sent_at      TEXT,
         UNIQUE (topic_id, recipient_id)
     )""",
+    """CREATE TABLE IF NOT EXISTS sender_prefs (
+        email              TEXT PRIMARY KEY,
+        body_mode          TEXT DEFAULT 'html',
+        footer_mode        TEXT DEFAULT 'html',
+        footer_text        TEXT,
+        footer_html        TEXT,
+        footer_image_b64   TEXT,
+        footer_image_name  TEXT,
+        footer_image_width INTEGER DEFAULT 60,
+        footer_image_align TEXT DEFAULT '가운데',
+        use_footer_image   INTEGER DEFAULT 0,
+        updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )""",
     "CREATE INDEX IF NOT EXISTS send_log_topic_idx  ON send_log (topic_id, status)",
     "CREATE INDEX IF NOT EXISTS send_log_sender_idx ON send_log (sender_email, sent_at)",
+]
+
+# 기존 DB에 컬럼이 없을 때 추가 (이미 있으면 무시)
+_MIGRATIONS = [
+    "ALTER TABLE topics ADD COLUMN default_preset TEXT",
 ]
 
 
@@ -157,6 +176,11 @@ _SCHEMA = [
 def init() -> bool:
     """테이블 생성 + secrets의 admin_email을 관리자 발신 계정으로 등록(없을 때만)."""
     _pipeline([(sql, []) for sql in _SCHEMA])
+    for mig in _MIGRATIONS:
+        try:
+            _exec(mig)
+        except Exception:
+            pass  # 컬럼이 이미 있으면 오류 → 무시
     admin = str(_cfg().get("admin_email", "") or "").strip().lower()
     if admin:
         _exec("INSERT OR IGNORE INTO senders (email, display_name, is_active, is_admin) "
@@ -199,14 +223,60 @@ def upsert_sender(email: str, display_name: str, is_admin: bool, is_active: bool
 
 # ---------------------------------------------------------------- 주제
 def list_topics() -> list:
-    return _rows("SELECT id, name, created_at FROM topics ORDER BY created_at DESC, id DESC")
+    return _rows("SELECT id, name, default_preset, created_at FROM topics ORDER BY created_at DESC, id DESC")
 
 
-def create_topic(name: str, created_by: str) -> int:
+def create_topic(name: str, created_by: str, default_preset: str = None) -> int:
     name = name.strip()
-    _exec("INSERT OR IGNORE INTO topics (name, created_by, created_at) VALUES (?, ?, ?)",
-          [name, created_by, _now()])
+    _exec("INSERT OR IGNORE INTO topics (name, created_by, default_preset, created_at) VALUES (?, ?, ?, ?)",
+          [name, created_by, default_preset, _now()])
     return _rows("SELECT id FROM topics WHERE name = ?", [name])[0]["id"]
+
+
+def set_topic_preset(topic_id: int, default_preset: str):
+    _exec("UPDATE topics SET default_preset = ? WHERE id = ?",
+          [default_preset or None, topic_id])
+
+
+# ---------------------------------------------------------------- 발신자 기본 설정
+def get_sender_prefs(email: str) -> dict:
+    rows = _rows("SELECT * FROM sender_prefs WHERE email = ?", [email.strip().lower()])
+    if not rows:
+        return {}
+    r = rows[0]
+    r["use_footer_image"] = bool(r.get("use_footer_image"))
+    return r
+
+
+def save_sender_prefs(email: str, prefs: dict):
+    email = email.strip().lower()
+    _exec("""INSERT INTO sender_prefs (
+                email, body_mode, footer_mode, footer_text, footer_html,
+                footer_image_b64, footer_image_name, footer_image_width,
+                footer_image_align, use_footer_image, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(email) DO UPDATE SET
+                body_mode = excluded.body_mode,
+                footer_mode = excluded.footer_mode,
+                footer_text = excluded.footer_text,
+                footer_html = excluded.footer_html,
+                footer_image_b64 = excluded.footer_image_b64,
+                footer_image_name = excluded.footer_image_name,
+                footer_image_width = excluded.footer_image_width,
+                footer_image_align = excluded.footer_image_align,
+                use_footer_image = excluded.use_footer_image,
+                updated_at = excluded.updated_at""",
+          [email,
+           prefs.get("body_mode", "html"),
+           prefs.get("footer_mode", "html"),
+           prefs.get("footer_text"),
+           prefs.get("footer_html"),
+           prefs.get("footer_image_b64"),
+           prefs.get("footer_image_name"),
+           int(prefs.get("footer_image_width") or 60),
+           prefs.get("footer_image_align") or "가운데",
+           int(bool(prefs.get("use_footer_image"))),
+           _now()])
 
 
 # ---------------------------------------------------------------- 수신자
