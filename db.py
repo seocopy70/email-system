@@ -152,7 +152,7 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS sender_prefs (
         email              TEXT PRIMARY KEY,
         body_mode          TEXT DEFAULT 'html',
-        footer_mode        TEXT DEFAULT 'html',
+        footer_mode        TEXT DEFAULT 'text',
         footer_text        TEXT,
         footer_html        TEXT,
         footer_image_b64   TEXT,
@@ -161,6 +161,20 @@ _SCHEMA = [
         footer_image_align TEXT DEFAULT '가운데',
         use_footer_image   INTEGER DEFAULT 0,
         updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS mail_templates (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_email  TEXT NOT NULL,
+        name         TEXT NOT NULL,
+        subject      TEXT,
+        body_mode    TEXT DEFAULT 'html',
+        plain_body   TEXT,
+        html_body    TEXT,
+        image_insert_mode TEXT,
+        image_width_pct   INTEGER DEFAULT 80,
+        image_align       TEXT DEFAULT '가운데',
+        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        UNIQUE (owner_email, name)
     )""",
     "CREATE INDEX IF NOT EXISTS send_log_topic_idx  ON send_log (topic_id, status)",
     "CREATE INDEX IF NOT EXISTS send_log_sender_idx ON send_log (sender_email, sent_at)",
@@ -396,3 +410,47 @@ def log_detail(topic_id: int, sender_email: str = None, limit: int = 200) -> lis
 def get_body(log_id: int) -> str:
     rows = _rows("SELECT body_html FROM send_log WHERE id = ?", [log_id])
     return (rows[0]["body_html"] if rows else "") or ""
+
+
+# ---------------------------------------------------------------- 사용자 메일 템플릿
+def list_mail_templates(owner_email: str) -> list:
+    return _rows(
+        "SELECT id, name, subject, body_mode, plain_body, html_body, "
+        "image_insert_mode, image_width_pct, image_align, created_at "
+        "FROM mail_templates WHERE owner_email = ? ORDER BY name",
+        [owner_email.strip().lower()])
+
+
+def save_mail_template(owner_email: str, name: str, data: dict) -> int:
+    name = name.strip()
+    owner = owner_email.strip().lower()
+    _exec("""INSERT INTO mail_templates (
+                owner_email, name, subject, body_mode, plain_body, html_body,
+                image_insert_mode, image_width_pct, image_align, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(owner_email, name) DO UPDATE SET
+                subject = excluded.subject,
+                body_mode = excluded.body_mode,
+                plain_body = excluded.plain_body,
+                html_body = excluded.html_body,
+                image_insert_mode = excluded.image_insert_mode,
+                image_width_pct = excluded.image_width_pct,
+                image_align = excluded.image_align""",
+          [owner, name, data.get("subject"), data.get("body_mode", "html"),
+           data.get("plain_body"), data.get("html_body"),
+           data.get("image_insert_mode"), int(data.get("image_width_pct") or 80),
+           data.get("image_align") or "가운데", _now()])
+    return _rows("SELECT id FROM mail_templates WHERE owner_email = ? AND name = ?",
+                 [owner, name])[0]["id"]
+
+
+def get_mail_template(owner_email: str, name: str) -> dict:
+    rows = _rows(
+        "SELECT * FROM mail_templates WHERE owner_email = ? AND name = ?",
+        [owner_email.strip().lower(), name.strip()])
+    return rows[0] if rows else {}
+
+
+def delete_mail_template(owner_email: str, name: str):
+    _exec("DELETE FROM mail_templates WHERE owner_email = ? AND name = ?",
+          [owner_email.strip().lower(), name.strip()])
