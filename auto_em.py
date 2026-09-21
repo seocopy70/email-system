@@ -109,6 +109,17 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] .block-container {
   padding-top: 1.5rem;
 }
+
+/* 전체 재실행 시 흰 화면 깜빡임 완화 */
+.stApp, .stApp > header { background: #f8fafc !important; }
+[data-testid="stStatusWidget"] {
+  visibility: hidden;
+  height: 0;
+  position: fixed;
+}
+div[data-testid="stDecoration"] { display: none; }
+/* 위젯 전환 시 부드러운 유지 */
+.block-container { transition: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -724,302 +735,349 @@ def _on_template_change():
 
 
 # ==========================================
-# 좌측 편집 | 우측 미리보기
+# 좌측 편집 | 우측 미리보기  (fragment: 옵션 변경 시 이 영역만 갱신)
 # ==========================================
-left, right = st.columns([1, 1], gap="large")
+def _compose_and_preview():
+    left, right = st.columns([1, 1], gap="large")
 
-with left:
-    st.markdown('<div class="dash-card"><div class="dash-card-title">발송 주제</div>', unsafe_allow_html=True)
-    t1, t2 = st.columns([1.4, 1])
-    with t1:
-        if topics:
-            topic_id = st.selectbox(
-                "주제", options=list(topic_names.keys()),
-                format_func=lambda i: topic_names[i], key="topic_id_sel",
+    with left:
+        st.markdown('<div class="dash-card"><div class="dash-card-title">발송 주제</div>', unsafe_allow_html=True)
+        t1, t2 = st.columns([1.4, 1])
+        with t1:
+            if topics:
+                topic_id = st.selectbox(
+                    "주제", options=list(topic_names.keys()),
+                    format_func=lambda i: topic_names[i], key="topic_id_sel",
+                    label_visibility="collapsed")
+            else:
+                topic_id = None
+                st.caption("주제가 없습니다. 오른쪽에 입력하세요.")
+        with t2:
+            st.text_input(
+                "새 주제", key="new_topic_name", placeholder="새 주제 입력 후 Enter",
+                on_change=_on_new_topic, label_visibility="collapsed")
+        if st.session_state.get("topic_error"):
+            st.error(st.session_state.pop("topic_error"))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # 주제 변경 시 연결된 템플릿 적용 (rerun 없이 아래에서 바로 반영)
+        if topic_id is not None:
+            linked = topic_presets.get(topic_id)
+            last_applied = st.session_state.get("_last_topic_for_preset")
+            if linked and last_applied != topic_id:
+                if linked in EMAIL_PRESETS:
+                    apply_preset(linked)
+                elif linked in user_tmpl_names:
+                    apply_preset(f"★ {linked}", custom=db.get_mail_template(sender_email, linked))
+                st.session_state["_last_topic_for_preset"] = topic_id
+
+        st.markdown('<div class="dash-card"><div class="dash-card-title">메일 작성</div>', unsafe_allow_html=True)
+
+        cur = st.session_state.get("active_preset", "기본형")
+        if cur not in all_tmpl_opts:
+            cur = "기본형"
+        c_tmpl, c_save = st.columns([3, 1])
+        with c_tmpl:
+            st.selectbox(
+                "템플릿", all_tmpl_opts,
+                index=all_tmpl_opts.index(cur) if cur in all_tmpl_opts else 0,
+                key="template_picker", on_change=_on_template_change,
                 label_visibility="collapsed")
-        else:
-            topic_id = None
-            st.caption("주제가 없습니다. 오른쪽에 입력하세요.")
-    with t2:
-        st.text_input(
-            "새 주제", key="new_topic_name", placeholder="새 주제 입력 후 Enter",
-            on_change=_on_new_topic, label_visibility="collapsed")
-    if st.session_state.get("topic_error"):
-        st.error(st.session_state.pop("topic_error"))
-    st.markdown("</div>", unsafe_allow_html=True)
+        with c_save:
+            if st.button("저장", use_container_width=True, help="현재 내용을 템플릿으로 저장"):
+                st.session_state["show_save_tmpl_form"] = True
 
-    if topic_id is not None:
-        linked = topic_presets.get(topic_id)
-        last_applied = st.session_state.get("_last_topic_for_preset")
-        if linked and last_applied != topic_id:
-            if linked in EMAIL_PRESETS:
-                apply_preset(linked)
-            elif linked in user_tmpl_names:
-                apply_preset(f"★ {linked}", custom=db.get_mail_template(sender_email, linked))
-            st.session_state["_last_topic_for_preset"] = topic_id
-            st.rerun()
-
-    st.markdown('<div class="dash-card"><div class="dash-card-title">메일 작성</div>', unsafe_allow_html=True)
-
-    cur = st.session_state.get("active_preset", "기본형")
-    if cur not in all_tmpl_opts:
-        cur = "기본형"
-    c_tmpl, c_save = st.columns([3, 1])
-    with c_tmpl:
-        st.selectbox(
-            "템플릿", all_tmpl_opts,
-            index=all_tmpl_opts.index(cur) if cur in all_tmpl_opts else 0,
-            key="template_picker", on_change=_on_template_change,
-            label_visibility="collapsed")
-    with c_save:
-        if st.button("저장", use_container_width=True, help="현재 내용을 템플릿으로 저장"):
-            st.session_state["show_save_tmpl_form"] = True
-
-    if st.session_state.get("show_save_tmpl_form"):
-        with st.form("save_tmpl_form", clear_on_submit=False):
-            tname = st.text_input("템플릿 이름", placeholder="예: 세미나 초청")
-            if st.form_submit_button("확인"):
-                if tname.strip():
-                    try:
-                        db.save_mail_template(sender_email, tname.strip(), {
-                            "subject": st.session_state.get("email_subject_template"),
-                            "body_mode": st.session_state.get("body_mode", "html"),
-                            "plain_body": st.session_state.get("email_body_template"),
-                            "html_body": st.session_state.get("email_html_template"),
-                            "image_insert_mode": st.session_state.get("image_insert_mode"),
-                            "image_width_pct": st.session_state.get("image_width_pct", 80),
-                            "image_align": st.session_state.get("image_align", "가운데"),
-                        })
-                        st.session_state["active_preset"] = f"★ {tname.strip()}"
-                        st.session_state["show_save_tmpl_form"] = False
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"저장 실패: {e}")
-                else:
-                    st.warning("이름을 입력하세요.")
-
-    s1, s2 = st.columns([4, 1.2])
-    with s1:
-        email_subject_template = st.text_input(
-            "제목", key="email_subject_template", label_visibility="collapsed",
-            placeholder="메일 제목")
-    with s2:
-        render_var_insert("email_subject_template", "var_subj")
-
-    tab_body, tab_footer, tab_form = st.tabs(["본문", "푸터", "설문지"])
-
-    with tab_body:
-        body_mode = st.radio(
-            "형식", list(BODY_MODE_LABELS.keys()),
-            format_func=lambda k: BODY_MODE_LABELS[k],
-            horizontal=True, key="body_mode", label_visibility="collapsed")
-        use_plain_text_body = body_mode in ("text", "both")
-        use_html_body = body_mode in ("html", "both")
-        email_body_template = st.session_state.get("email_body_template", "")
-        email_html_template = st.session_state.get("email_html_template", "")
-
-        if use_plain_text_body:
-            v1, v2 = st.columns([5, 1.3])
-            with v2:
-                render_var_insert("email_body_template", "var_body_txt")
-            with v1:
-                st.caption("텍스트 본문")
-            email_body_template = st.text_area(
-                "텍스트 본문", key="email_body_template", height=160, label_visibility="collapsed")
-        if use_html_body:
-            v1, v2 = st.columns([5, 1.3])
-            with v2:
-                render_var_insert("email_html_template", "var_body_html")
-            with v1:
-                st.caption("HTML 본문")
-            email_html_template = st.text_area(
-                "HTML 본문", key="email_html_template", height=160, label_visibility="collapsed")
-
-        st.toggle("본문 이미지", key="use_body_image")
-        use_body_image = st.session_state.get("use_body_image", False)
-        image_insert_mode = st.session_state.get("image_insert_mode", "본문 하단 첨부")
-        image_width_pct = st.session_state.get("image_width_pct", 80)
-        image_align = st.session_state.get("image_align", "가운데")
-        uploaded_body_image = None
-        body_image_bytes = None
-
-        if use_body_image:
-            uploaded_body_image = st.file_uploader(
-                "이미지 파일", type=["png", "jpg", "jpeg"], key="body_img_uploader")
-            if uploaded_body_image:
-                body_image_bytes = uploaded_body_image.getvalue()
-                if use_html_body and st.session_state.get("_last_body_img_hash") != hashlib.md5(body_image_bytes).hexdigest():
-                    mime = uploaded_body_image.type or "image/png"
-                    b64 = base64.b64encode(body_image_bytes).decode("utf-8")
-                    img_tag = (
-                        f'<img src="data:{mime};base64,{b64}" '
-                        f'style="max-width:{st.session_state.get("image_width_pct", 80)}%;'
-                        f'height:auto;display:block;margin:18px auto;" />'
-                    )
-                    html_cur = st.session_state.get("email_html_template") or ""
-                    if "{이미지}" in html_cur:
-                        st.session_state["email_html_template"] = html_cur.replace("{이미지}", img_tag)
+        if st.session_state.get("show_save_tmpl_form"):
+            with st.form("save_tmpl_form", clear_on_submit=False):
+                tname = st.text_input("템플릿 이름", placeholder="예: 세미나 초청")
+                if st.form_submit_button("확인"):
+                    if tname.strip():
+                        try:
+                            db.save_mail_template(sender_email, tname.strip(), {
+                                "subject": st.session_state.get("email_subject_template"),
+                                "body_mode": st.session_state.get("body_mode", "html"),
+                                "plain_body": st.session_state.get("email_body_template"),
+                                "html_body": st.session_state.get("email_html_template"),
+                                "image_insert_mode": st.session_state.get("image_insert_mode"),
+                                "image_width_pct": st.session_state.get("image_width_pct", 80),
+                                "image_align": st.session_state.get("image_align", "가운데"),
+                            })
+                            st.session_state["active_preset"] = f"★ {tname.strip()}"
+                            st.session_state["show_save_tmpl_form"] = False
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"저장 실패: {e}")
                     else:
-                        st.session_state["email_html_template"] = html_cur + "\n" + img_tag
-                    st.session_state["_last_body_img_hash"] = hashlib.md5(body_image_bytes).hexdigest()
-                    st.session_state["use_body_image"] = False
-                    st.rerun()
-            ic1, ic2, ic3 = st.columns(3)
-            with ic1:
-                image_insert_mode = st.selectbox(
-                    "삽입", ["본문 하단 첨부", "본문 중간 삽입 (마커: {이미지})"],
-                    key="image_insert_mode")
-            with ic2:
-                image_width_pct = st.slider("너비%", 20, 100, step=5, key="image_width_pct")
-            with ic3:
-                image_align = st.selectbox("정렬", ["가운데", "왼쪽", "오른쪽"], key="image_align")
+                        st.warning("이름을 입력하세요.")
 
-    with tab_footer:
-        footer_mode = st.radio(
-            "푸터", list(FOOTER_MODE_LABELS.keys()),
-            format_func=lambda k: FOOTER_MODE_LABELS[k],
-            horizontal=True, key="footer_mode", label_visibility="collapsed")
-        footer_text_template = ""
-        footer_html_template = ""
-        use_footer_image = False
-        uploaded_footer_image = None
-        footer_image_bytes = None
-        footer_image_width_pct = st.session_state.get("footer_image_width_pct", 60)
-        footer_image_align = st.session_state.get("footer_image_align", "가운데")
+        s1, s2 = st.columns([4, 1.2])
+        with s1:
+            email_subject_template = st.text_input(
+                "제목", key="email_subject_template", label_visibility="collapsed",
+                placeholder="메일 제목")
+        with s2:
+            render_var_insert("email_subject_template", "var_subj")
 
-        if footer_mode == "text":
-            fv1, fv2 = st.columns([5, 1.3])
-            with fv2:
-                render_var_insert("footer_text_template", "var_footer")
-            with fv1:
-                st.caption("푸터 텍스트")
-            footer_text_template = st.text_area(
-                "푸터 텍스트", key="footer_text_template", height=90, label_visibility="collapsed")
-            st.session_state["use_footer_image"] = False
-        elif footer_mode == "image":
-            st.session_state["use_footer_image"] = True
-            use_footer_image = True
-            if st.session_state.get("saved_footer_image_b64") and not st.session_state.get("_footer_upload_override"):
-                try:
-                    footer_image_bytes = base64.b64decode(st.session_state["saved_footer_image_b64"])
-                    st.caption(f"기본 이미지: {st.session_state.get('saved_footer_image_name', '')}")
-                except Exception:
-                    footer_image_bytes = None
-            uploaded_footer_image = st.file_uploader(
-                "푸터 이미지", type=["png", "jpg", "jpeg"], key="footer_img_uploader")
-            if uploaded_footer_image:
-                footer_image_bytes = uploaded_footer_image.getvalue()
-                st.session_state["_footer_bytes_for_save"] = footer_image_bytes
-                st.session_state["_footer_name_for_save"] = uploaded_footer_image.name
-                st.session_state["_footer_upload_override"] = True
-            fc1, fc2 = st.columns(2)
-            with fc1:
-                footer_image_width_pct = st.slider(
-                    "너비%", 20, 100, step=5, key="footer_image_width_pct")
-            with fc2:
-                footer_image_align = st.selectbox(
-                    "정렬", ["가운데", "왼쪽", "오른쪽"], key="footer_image_align")
-            footer_text_template = st.text_area(
-                "이미지 아래 문구", key="footer_text_template", height=70,
-                placeholder="선택 사항")
-        else:
-            st.session_state["use_footer_image"] = False
-            st.caption("푸터 없음")
+        tab_body, tab_footer, tab_form = st.tabs(["본문", "푸터", "설문지"])
 
-    with tab_form:
-        form_mode = st.radio(
-            "설문", ["사용 안 함", "기존 링크", "새 폼 생성(API)"],
-            horizontal=True, key="form_mode_radio", label_visibility="collapsed")
-        if form_mode == "기존 링크":
-            form_url_input = st.text_input(
-                "Forms 링크", key="google_form_input",
-                placeholder="https://docs.google.com/forms/...")
-            if form_url_input:
-                st.session_state["google_form_url"] = form_url_input.strip()
-            st.session_state["include_google_form"] = bool(form_url_input)
-        elif form_mode == "새 폼 생성(API)":
-            uploaded_cred = st.file_uploader("서비스 계정 JSON", type=["json"], key="forms_cred")
-            form_title = st.text_input("설문 제목", value="참석 신청서")
-            form_description = st.text_area("설명", value="간단한 사전 문항입니다.", height=60)
-            if st.button("설문지 생성"):
-                if not uploaded_cred:
-                    st.error("JSON을 업로드하세요.")
-                else:
-                    try:
-                        from google.oauth2 import service_account
-                        from googleapiclient.discovery import build
-                        cred_json = json.loads(uploaded_cred.getvalue().decode("utf-8"))
-                        scopes = ["https://www.googleapis.com/auth/forms.body",
-                                  "https://www.googleapis.com/auth/drive"]
-                        creds = service_account.Credentials.from_service_account_info(
-                            cred_json, scopes=scopes)
-                        service = build("forms", "v1", credentials=creds)
-                        create_body = {"info": {"title": form_title, "documentTitle": form_title,
-                                                "description": form_description}}
-                        form = service.forms().create(body=create_body).execute()
-                        form_name = form.get("name") or ""
-                        form_id = form_name.split("/")[-1] if "/" in form_name else form.get("formId") or ""
-                        form_url = (f"https://docs.google.com/forms/d/e/{form_id}/viewform"
-                                    if form_id else (form.get("responderUri") or ""))
-                        if form_url:
-                            st.session_state["google_form_url"] = form_url
-                            st.session_state["include_google_form"] = True
-                            st.success("생성 완료")
-                            st.write(form_url)
+        with tab_body:
+            body_mode = st.radio(
+                "형식", list(BODY_MODE_LABELS.keys()),
+                format_func=lambda k: BODY_MODE_LABELS[k],
+                horizontal=True, key="body_mode", label_visibility="collapsed")
+            use_plain_text_body = body_mode in ("text", "both")
+            use_html_body = body_mode in ("html", "both")
+            email_body_template = st.session_state.get("email_body_template", "")
+            email_html_template = st.session_state.get("email_html_template", "")
+
+            if use_plain_text_body:
+                v1, v2 = st.columns([5, 1.3])
+                with v2:
+                    render_var_insert("email_body_template", "var_body_txt")
+                with v1:
+                    st.caption("텍스트 본문")
+                email_body_template = st.text_area(
+                    "텍스트 본문", key="email_body_template", height=160, label_visibility="collapsed")
+            if use_html_body:
+                v1, v2 = st.columns([5, 1.3])
+                with v2:
+                    render_var_insert("email_html_template", "var_body_html")
+                with v1:
+                    st.caption("HTML 본문")
+                email_html_template = st.text_area(
+                    "HTML 본문", key="email_html_template", height=160, label_visibility="collapsed")
+
+            st.toggle("본문 이미지", key="use_body_image")
+            use_body_image = st.session_state.get("use_body_image", False)
+            image_insert_mode = st.session_state.get("image_insert_mode", "본문 하단 첨부")
+            image_width_pct = st.session_state.get("image_width_pct", 80)
+            image_align = st.session_state.get("image_align", "가운데")
+            uploaded_body_image = None
+            body_image_bytes = None
+
+            if use_body_image:
+                uploaded_body_image = st.file_uploader(
+                    "이미지 파일", type=["png", "jpg", "jpeg"], key="body_img_uploader")
+                if uploaded_body_image:
+                    body_image_bytes = uploaded_body_image.getvalue()
+                    if use_html_body and st.session_state.get("_last_body_img_hash") != hashlib.md5(body_image_bytes).hexdigest():
+                        mime = uploaded_body_image.type or "image/png"
+                        b64 = base64.b64encode(body_image_bytes).decode("utf-8")
+                        img_tag = (
+                            f'<img src="data:{mime};base64,{b64}" '
+                            f'style="max-width:{st.session_state.get("image_width_pct", 80)}%;'
+                            f'height:auto;display:block;margin:18px auto;" />'
+                        )
+                        html_cur = st.session_state.get("email_html_template") or ""
+                        if "{이미지}" in html_cur:
+                            st.session_state["email_html_template"] = html_cur.replace("{이미지}", img_tag)
                         else:
-                            st.error("링크를 확인하지 못했습니다.")
-                    except ImportError:
-                        st.error("google-api-python-client, google-auth 설치 필요")
-                    except Exception as e:
-                        st.error(str(e))
-        else:
-            st.session_state["include_google_form"] = False
+                            st.session_state["email_html_template"] = html_cur + "\n" + img_tag
+                        st.session_state["_last_body_img_hash"] = hashlib.md5(body_image_bytes).hexdigest()
+                        st.session_state["use_body_image"] = False
+                        st.rerun()
+                ic1, ic2, ic3 = st.columns(3)
+                with ic1:
+                    image_insert_mode = st.selectbox(
+                        "삽입", ["본문 하단 첨부", "본문 중간 삽입 (마커: {이미지})"],
+                        key="image_insert_mode")
+                with ic2:
+                    image_width_pct = st.slider("너비%", 20, 100, step=5, key="image_width_pct")
+                with ic3:
+                    image_align = st.selectbox("정렬", ["가운데", "왼쪽", "오른쪽"], key="image_align")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+        with tab_footer:
+            footer_mode = st.radio(
+                "푸터", list(FOOTER_MODE_LABELS.keys()),
+                format_func=lambda k: FOOTER_MODE_LABELS[k],
+                horizontal=True, key="footer_mode", label_visibility="collapsed")
+            footer_text_template = ""
+            footer_html_template = ""
+            use_footer_image = False
+            uploaded_footer_image = None
+            footer_image_bytes = None
+            footer_image_width_pct = st.session_state.get("footer_image_width_pct", 60)
+            footer_image_align = st.session_state.get("footer_image_align", "가운데")
 
-# ---- 우측 미리보기 ----
-with right:
-    st.markdown('<div class="dash-card-title" style="margin-bottom:6px;">실시간 미리보기</div>',
-                unsafe_allow_html=True)
-    preview_src = "샘플 데이터"
-    row_data = SAMPLE_ROW
-    preview_opts = ["샘플 데이터"]
-    if st.session_state.get("valid_df_cache") is not None:
-        vdf = st.session_state["valid_df_cache"]
-        if vdf is not None and not getattr(vdf, "empty", True):
-            preview_opts += [f"{r['회사명']} ({r['이메일']})" for _, r in vdf.iterrows()]
-    pick = st.selectbox("미리보기 대상", preview_opts, key="compose_preview_pick",
-                        label_visibility="collapsed")
-    if pick != "샘플 데이터" and st.session_state.get("valid_df_cache") is not None:
-        vdf = st.session_state["valid_df_cache"]
-        preview_src = pick
-        for _, r in vdf.iterrows():
-            if f"{r['회사명']} ({r['이메일']})" == pick:
-                row_data = r
-                break
+            if footer_mode == "text":
+                fv1, fv2 = st.columns([5, 1.3])
+                with fv2:
+                    render_var_insert("footer_text_template", "var_footer")
+                with fv1:
+                    st.caption("푸터 텍스트")
+                footer_text_template = st.text_area(
+                    "푸터 텍스트", key="footer_text_template", height=90, label_visibility="collapsed")
+                st.session_state["use_footer_image"] = False
+            elif footer_mode == "image":
+                st.session_state["use_footer_image"] = True
+                use_footer_image = True
+                if st.session_state.get("saved_footer_image_b64") and not st.session_state.get("_footer_upload_override"):
+                    try:
+                        footer_image_bytes = base64.b64decode(st.session_state["saved_footer_image_b64"])
+                        st.caption(f"기본 이미지: {st.session_state.get('saved_footer_image_name', '')}")
+                    except Exception:
+                        footer_image_bytes = None
+                uploaded_footer_image = st.file_uploader(
+                    "푸터 이미지", type=["png", "jpg", "jpeg"], key="footer_img_uploader")
+                if uploaded_footer_image:
+                    footer_image_bytes = uploaded_footer_image.getvalue()
+                    st.session_state["_footer_bytes_for_save"] = footer_image_bytes
+                    st.session_state["_footer_name_for_save"] = uploaded_footer_image.name
+                    st.session_state["_footer_upload_override"] = True
+                fc1, fc2 = st.columns(2)
+                with fc1:
+                    footer_image_width_pct = st.slider(
+                        "너비%", 20, 100, step=5, key="footer_image_width_pct")
+                with fc2:
+                    footer_image_align = st.selectbox(
+                        "정렬", ["가운데", "왼쪽", "오른쪽"], key="footer_image_align")
+                footer_text_template = st.text_area(
+                    "이미지 아래 문구", key="footer_text_template", height=70,
+                    placeholder="선택 사항")
+            else:
+                st.session_state["use_footer_image"] = False
+                st.caption("푸터 없음")
 
-    b64_body_img = base64.b64encode(body_image_bytes).decode("utf-8") if body_image_bytes else None
-    b64_footer_img = base64.b64encode(footer_image_bytes).decode("utf-8") if footer_image_bytes else None
-    preview_subj, preview_html = build_email_html(
-        row_data, email_subject_template,
-        email_body_template if use_plain_text_body else "",
-        sender_name,
-        html_tmpl=email_html_template if use_html_body else "",
-        use_plain_text=use_plain_text_body, use_html_body=use_html_body,
-        has_body_image=bool(body_image_bytes), has_footer_image=bool(footer_image_bytes),
-        is_preview=True, body_img_base64=b64_body_img, footer_img_base64=b64_footer_img,
-        image_insert_mode=image_insert_mode, image_width_pct=image_width_pct, image_align=image_align,
-        footer_text_tmpl=footer_text_template, footer_html_tmpl=footer_html_template,
-        footer_image_width_pct=footer_image_width_pct, footer_image_align=footer_image_align,
-    )
-    st.markdown(
-        f'<div class="preview-meta"><b>제목</b> {preview_subj}<br/>'
-        f'<b>대상</b> {preview_src}</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown('<div class="preview-shell">', unsafe_allow_html=True)
-    st.components.v1.html(preview_html, height=620, scrolling=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+        with tab_form:
+            form_mode = st.radio(
+                "설문", ["사용 안 함", "기존 링크", "새 폼 생성(API)"],
+                horizontal=True, key="form_mode_radio", label_visibility="collapsed")
+            if form_mode == "기존 링크":
+                form_url_input = st.text_input(
+                    "Forms 링크", key="google_form_input",
+                    placeholder="https://docs.google.com/forms/...")
+                if form_url_input:
+                    st.session_state["google_form_url"] = form_url_input.strip()
+                st.session_state["include_google_form"] = bool(form_url_input)
+            elif form_mode == "새 폼 생성(API)":
+                uploaded_cred = st.file_uploader("서비스 계정 JSON", type=["json"], key="forms_cred")
+                form_title = st.text_input("설문 제목", value="참석 신청서")
+                form_description = st.text_area("설명", value="간단한 사전 문항입니다.", height=60)
+                if st.button("설문지 생성"):
+                    if not uploaded_cred:
+                        st.error("JSON을 업로드하세요.")
+                    else:
+                        try:
+                            from google.oauth2 import service_account
+                            from googleapiclient.discovery import build
+                            cred_json = json.loads(uploaded_cred.getvalue().decode("utf-8"))
+                            scopes = ["https://www.googleapis.com/auth/forms.body",
+                                      "https://www.googleapis.com/auth/drive"]
+                            creds = service_account.Credentials.from_service_account_info(
+                                cred_json, scopes=scopes)
+                            service = build("forms", "v1", credentials=creds)
+                            create_body = {"info": {"title": form_title, "documentTitle": form_title,
+                                                    "description": form_description}}
+                            form = service.forms().create(body=create_body).execute()
+                            form_name = form.get("name") or ""
+                            form_id = form_name.split("/")[-1] if "/" in form_name else form.get("formId") or ""
+                            form_url = (f"https://docs.google.com/forms/d/e/{form_id}/viewform"
+                                        if form_id else (form.get("responderUri") or ""))
+                            if form_url:
+                                st.session_state["google_form_url"] = form_url
+                                st.session_state["include_google_form"] = True
+                                st.success("생성 완료")
+                                st.write(form_url)
+                            else:
+                                st.error("링크를 확인하지 못했습니다.")
+                        except ImportError:
+                            st.error("google-api-python-client, google-auth 설치 필요")
+                        except Exception as e:
+                            st.error(str(e))
+            else:
+                st.session_state["include_google_form"] = False
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---- 우측 미리보기 ----
+    with right:
+        st.markdown('<div class="dash-card-title" style="margin-bottom:6px;">실시간 미리보기</div>',
+                    unsafe_allow_html=True)
+        preview_src = "샘플 데이터"
+        row_data = SAMPLE_ROW
+        preview_opts = ["샘플 데이터"]
+        if st.session_state.get("valid_df_cache") is not None:
+            vdf = st.session_state["valid_df_cache"]
+            if vdf is not None and not getattr(vdf, "empty", True):
+                preview_opts += [f"{r['회사명']} ({r['이메일']})" for _, r in vdf.iterrows()]
+        pick = st.selectbox("미리보기 대상", preview_opts, key="compose_preview_pick",
+                            label_visibility="collapsed")
+        if pick != "샘플 데이터" and st.session_state.get("valid_df_cache") is not None:
+            vdf = st.session_state["valid_df_cache"]
+            preview_src = pick
+            for _, r in vdf.iterrows():
+                if f"{r['회사명']} ({r['이메일']})" == pick:
+                    row_data = r
+                    break
+
+        b64_body_img = base64.b64encode(body_image_bytes).decode("utf-8") if body_image_bytes else None
+        b64_footer_img = base64.b64encode(footer_image_bytes).decode("utf-8") if footer_image_bytes else None
+        preview_subj, preview_html = build_email_html(
+            row_data, email_subject_template,
+            email_body_template if use_plain_text_body else "",
+            sender_name,
+            html_tmpl=email_html_template if use_html_body else "",
+            use_plain_text=use_plain_text_body, use_html_body=use_html_body,
+            has_body_image=bool(body_image_bytes), has_footer_image=bool(footer_image_bytes),
+            is_preview=True, body_img_base64=b64_body_img, footer_img_base64=b64_footer_img,
+            image_insert_mode=image_insert_mode, image_width_pct=image_width_pct, image_align=image_align,
+            footer_text_tmpl=footer_text_template, footer_html_tmpl=footer_html_template,
+            footer_image_width_pct=footer_image_width_pct, footer_image_align=footer_image_align,
+        )
+        st.markdown(
+            f'<div class="preview-meta"><b>제목</b> {preview_subj}<br/>'
+            f'<b>대상</b> {preview_src}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="preview-shell">', unsafe_allow_html=True)
+        st.components.v1.html(preview_html, height=620, scrolling=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # 발송 구간에서 쓰도록 상태 저장
+    st.session_state["_compose"] = {
+        "topic_id": topic_id,
+        "email_subject_template": email_subject_template,
+        "email_body_template": email_body_template if use_plain_text_body else "",
+        "email_html_template": email_html_template if use_html_body else "",
+        "use_plain_text_body": use_plain_text_body,
+        "use_html_body": use_html_body,
+        "body_image_bytes": body_image_bytes,
+        "footer_image_bytes": footer_image_bytes,
+        "uploaded_body_image": uploaded_body_image,
+        "uploaded_footer_image": uploaded_footer_image,
+        "image_insert_mode": image_insert_mode,
+        "image_width_pct": image_width_pct,
+        "image_align": image_align,
+        "footer_text_template": footer_text_template,
+        "footer_html_template": footer_html_template,
+        "footer_image_width_pct": footer_image_width_pct,
+        "footer_image_align": footer_image_align,
+    }
+
+# 옵션 변경 시 이 영역만 부분 갱신 (전체 페이지 흰 깜빡임 감소)
+if hasattr(st, "fragment"):
+    _compose_and_preview = st.fragment(_compose_and_preview)
+_compose_and_preview()
+
+# fragment 결과를 바깥 스코프로
+_c = st.session_state.get("_compose") or {}
+topic_id = _c.get("topic_id")
+email_subject_template = _c.get("email_subject_template") or st.session_state.get("email_subject_template", "")
+email_body_template = _c.get("email_body_template") or ""
+email_html_template = _c.get("email_html_template") or ""
+use_plain_text_body = _c.get("use_plain_text_body", False)
+use_html_body = _c.get("use_html_body", True)
+body_image_bytes = _c.get("body_image_bytes")
+footer_image_bytes = _c.get("footer_image_bytes")
+uploaded_body_image = _c.get("uploaded_body_image")
+uploaded_footer_image = _c.get("uploaded_footer_image")
+image_insert_mode = _c.get("image_insert_mode", "본문 하단 첨부")
+image_width_pct = _c.get("image_width_pct", 80)
+image_align = _c.get("image_align", "가운데")
+footer_text_template = _c.get("footer_text_template") or ""
+footer_html_template = _c.get("footer_html_template") or ""
+footer_image_width_pct = _c.get("footer_image_width_pct", 60)
+footer_image_align = _c.get("footer_image_align", "가운데")
 
 st.divider()
 
