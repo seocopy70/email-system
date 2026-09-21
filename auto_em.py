@@ -485,69 +485,114 @@ with col_temp1:
         st.session_state["image_width_pct"] = preset["image_width_pct"]
         st.session_state["image_align"] = preset["image_align"]
 
-    # 기본값은 '기본형' 프리셋을 그대로 사용 (중복 정의 제거)
+    # 기본값: HTML 본문 우선 (텍스트 비활성)
     _base = EMAIL_PRESETS["기본형"]
     st.session_state.setdefault("email_subject_template", _base["subject"])
     st.session_state.setdefault("email_body_template", _base["plain_body"])
     st.session_state.setdefault("email_html_template", _base["html_body"])
-    st.session_state.setdefault("use_plain_text_body", True)
-    st.session_state.setdefault("use_html_body", False)
+    st.session_state.setdefault("use_plain_text_body", False)
+    st.session_state.setdefault("use_html_body", True)
     st.session_state.setdefault("image_insert_mode", "본문 하단 첨부")
     st.session_state.setdefault("image_width_pct", 80)
     st.session_state.setdefault("image_align", "가운데")
+    st.session_state.setdefault("use_footer_text", False)
+    st.session_state.setdefault("use_footer_html", True)
+    st.session_state.setdefault("use_body_image", False)
+    st.session_state.setdefault("use_footer_image", False)
+    st.session_state.setdefault("footer_text_template", "감사합니다.\n{발신자}")
+    st.session_state.setdefault("footer_html_template", "<p>감사합니다.<br>{발신자}</p>")
+    st.session_state.setdefault("footer_image_width_pct", 60)
+    st.session_state.setdefault("footer_image_align", "가운데")
 
     email_subject_template = st.text_input("메일 제목 템플릿", key="email_subject_template")
 
-    st.caption("본문은 일반 텍스트, HTML, 또는 둘 다 함께 작성할 수 있습니다.")
+    st.markdown("**본문 작성 방식**")
+    st.caption("사용할 방식만 체크하면 해당 입력란이 표시됩니다. (기본: HTML)")
     use_plain_text_body = st.checkbox("일반 텍스트 본문 사용", key="use_plain_text_body")
     use_html_body = st.checkbox("HTML 본문 사용", key="use_html_body")
 
-    insert_modes = ["본문 하단 첨부", "본문 중간 삽입 (마커: {이미지})"]
-    image_insert_mode = st.selectbox(
-        "이미지 삽입 방식", insert_modes,
-        key="image_insert_mode",
-        help="본문 중간에 넣고 싶다면 본문에 {이미지}를 입력해 주세요.",
-    )
-    image_width_pct = st.slider("이미지 너비 비율(%)", min_value=20, max_value=100,
-                                step=5, key="image_width_pct")
-    aligns = ["가운데", "왼쪽", "오른쪽"]
-    image_align = st.selectbox("이미지 정렬", aligns, key="image_align")
+    email_body_template = ""
+    email_html_template = ""
 
-    email_body_template = st.text_area(
-        "메일 본문 내용 (일반 텍스트 모드)", key="email_body_template", height=220,
-        disabled=not use_plain_text_body,
-        help="이미지를 본문 중간에 넣고 싶으면 {이미지}를 입력하세요.")
-    email_html_template = st.text_area(
-        "메일 본문 내용 (HTML 모드)", key="email_html_template", height=220,
-        disabled=not use_html_body,
-        help="HTML에서 이미지를 넣고 싶으면 {이미지}를 입력하세요.")
+    if use_plain_text_body:
+        email_body_template = st.text_area(
+            "메일 본문 내용 (일반 텍스트)", key="email_body_template", height=220,
+            help="이미지를 본문 중간에 넣고 싶으면 {이미지}를 입력하세요.")
+    if use_html_body:
+        email_html_template = st.text_area(
+            "메일 본문 내용 (HTML)", key="email_html_template", height=220,
+            help="HTML에서 이미지를 넣고 싶으면 {이미지}를 입력하세요.")
+
+    if not use_plain_text_body and not use_html_body:
+        st.warning("본문 방식(일반 텍스트 또는 HTML)을 하나 이상 선택해 주세요.")
+
+    st.markdown("**본문 이미지 설정**")
+    use_body_image = st.checkbox("본문 이미지 사용", key="use_body_image")
+    image_insert_mode = st.session_state.get("image_insert_mode", "본문 하단 첨부")
+    image_width_pct = st.session_state.get("image_width_pct", 80)
+    image_align = st.session_state.get("image_align", "가운데")
+    if use_body_image:
+        insert_modes = ["본문 하단 첨부", "본문 중간 삽입 (마커: {이미지})"]
+        image_insert_mode = st.selectbox(
+            "이미지 삽입 방식", insert_modes,
+            key="image_insert_mode",
+            help="본문 중간에 넣고 싶다면 본문에 {이미지}를 입력해 주세요.",
+        )
+        image_width_pct = st.slider("이미지 너비 비율(%)", min_value=20, max_value=100,
+                                    step=5, key="image_width_pct")
+        aligns = ["가운데", "왼쪽", "오른쪽"]
+        image_align = st.selectbox("이미지 정렬", aligns, key="image_align")
 
 with col_temp2:
-    st.write("🖼️ **본문 이미지 / 푸터 이미지 분리 첨부**")
-    uploaded_body_image = st.file_uploader("본문에 삽입할 이미지 (JPG, PNG)", type=["png", "jpg", "jpeg"])
-    uploaded_footer_image = st.file_uploader("푸터에 삽입할 이미지 (JPG, PNG)", type=["png", "jpg", "jpeg"])
-
+    st.markdown("**🖼️ 이미지 업로드**")
+    uploaded_body_image = None
     body_image_bytes = None
-    if uploaded_body_image:
-        body_image_bytes = uploaded_body_image.getvalue()
-        st.image(body_image_bytes, caption="본문 이미지 미리보기", use_container_width=True)
+    if use_body_image:
+        uploaded_body_image = st.file_uploader(
+            "본문에 삽입할 이미지 (JPG, PNG)", type=["png", "jpg", "jpeg"], key="body_img_uploader")
+        if uploaded_body_image:
+            body_image_bytes = uploaded_body_image.getvalue()
+            st.image(body_image_bytes, caption="본문 이미지 미리보기", use_container_width=True)
+        else:
+            st.caption("본문 이미지를 선택해 주세요.")
 
+    st.markdown("---")
+    st.markdown("**푸터 작성 방식**")
+    st.caption("사용할 방식만 체크하면 해당 입력란이 표시됩니다. (기본: HTML)")
+    use_footer_text = st.checkbox("푸터 텍스트 사용", key="use_footer_text")
+    use_footer_html = st.checkbox("푸터 HTML 사용", key="use_footer_html")
+
+    footer_text_template = ""
+    footer_html_template = ""
+
+    if use_footer_text:
+        footer_text_template = st.text_area(
+            "푸터 문구 (텍스트)", key="footer_text_template", height=120,
+            help="푸터 하단에 들어갈 문구를 입력하세요. {발신자} 같은 치환 태그를 사용할 수 있습니다.")
+    if use_footer_html:
+        footer_html_template = st.text_area(
+            "푸터 문구 (HTML)", key="footer_html_template", height=120,
+            help="푸터에 HTML을 넣고 싶다면 여기에 작성하세요. {푸터이미지} 마커를 넣으면 푸터 이미지가 위치합니다.")
+
+    if not use_footer_text and not use_footer_html:
+        st.caption("푸터를 사용하지 않습니다. (필요하면 위 옵션을 체크하세요)")
+
+    st.markdown("**푸터 이미지 설정**")
+    use_footer_image = st.checkbox("푸터 이미지 사용", key="use_footer_image")
+    uploaded_footer_image = None
     footer_image_bytes = None
-    if uploaded_footer_image:
-        footer_image_bytes = uploaded_footer_image.getvalue()
-        st.image(footer_image_bytes, caption="푸터 이미지 미리보기", use_container_width=True)
-
-    if not (uploaded_body_image or uploaded_footer_image):
-        st.info("이미지 없이 텍스트만 보내실 수도 있습니다.")
-
-    footer_text_template = st.text_area(
-        "푸터 문구 (텍스트)", value="감사합니다.\n{발신자}", height=120,
-        help="푸터 하단에 들어갈 문구를 입력하세요. {발신자} 같은 치환 태그를 사용할 수 있습니다.")
-    footer_html_template = st.text_area(
-        "푸터 문구 (HTML)", value="<p>감사합니다.<br>{발신자}</p>", height=120,
-        help="푸터에 HTML을 넣고 싶다면 여기에 작성하세요. {푸터이미지} 마커를 넣으면 푸터 이미지가 위치합니다.")
-    footer_image_width_pct = st.slider("푸터 이미지 너비 비율(%)", min_value=20, max_value=100, value=60, step=5)
-    footer_image_align = st.selectbox("푸터 이미지 정렬", ["가운데", "왼쪽", "오른쪽"], index=0)
+    footer_image_width_pct = st.session_state.get("footer_image_width_pct", 60)
+    footer_image_align = st.session_state.get("footer_image_align", "가운데")
+    if use_footer_image:
+        uploaded_footer_image = st.file_uploader(
+            "푸터에 삽입할 이미지 (JPG, PNG)", type=["png", "jpg", "jpeg"], key="footer_img_uploader")
+        if uploaded_footer_image:
+            footer_image_bytes = uploaded_footer_image.getvalue()
+            st.image(footer_image_bytes, caption="푸터 이미지 미리보기", use_container_width=True)
+        footer_image_width_pct = st.slider(
+            "푸터 이미지 너비 비율(%)", min_value=20, max_value=100, step=5, key="footer_image_width_pct")
+        footer_image_align = st.selectbox(
+            "푸터 이미지 정렬", ["가운데", "왼쪽", "오른쪽"], key="footer_image_align")
 
 # ==========================================
 # 3-1. 구글 설문지 설정 (기존 링크 또는 API 생성)
