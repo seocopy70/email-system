@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import * as XLSX from "xlsx";
-import { api, AuthUser, fileToBase64 } from "@/lib/api";
+import { api, AuthUser, fileToBase64, setAuthToken, setUnauthorizedHandler } from "@/lib/api";
 
 type BodyMode = "html" | "text" | "both";
 type FooterMode = "text" | "image" | "none";
@@ -85,6 +85,16 @@ export default function Home() {
   useEffect(() => {
     loadMeta().catch(console.error);
   }, [loadMeta]);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setUser(null);
+      setPassword("");
+      setAuthToken(null);
+      setLoginErr("세션이 만료되었습니다. 다시 로그인해 주세요.");
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -176,8 +186,8 @@ export default function Home() {
     setBusy(true);
     try {
       const u = await api.login(loginEmail, password, loginName || undefined);
+      setAuthToken(u.token); // 이후 요청이 인증되도록 user 설정보다 먼저
       setUser(u);
-      sessionStorage.setItem("em_pw", password);
     } catch (e: any) {
       setLoginErr(e.message || "로그인 실패");
     } finally {
@@ -187,7 +197,8 @@ export default function Home() {
 
   function logout() {
     setUser(null);
-    sessionStorage.removeItem("em_pw");
+    setPassword("");
+    setAuthToken(null);
   }
 
   function applyPreset(name: string) {
@@ -220,15 +231,9 @@ export default function Home() {
       setBodyImageB64(null);
       return;
     }
-    const b64 = await fileToBase64(file);
-    setBodyImageB64(b64);
+    // 이미지는 서버가 본문의 {이미지} 자리(없으면 본문 아래)에 한 번만 넣어 줍니다.
+    setBodyImageB64(await fileToBase64(file));
     setUseBodyImage(true);
-    // HTML 모드: data-URI로 본문에 삽입
-    if (bodyMode === "html" || bodyMode === "both") {
-      const mime = file.type || "image/png";
-      const imgTag = `<img src="data:${mime};base64,${b64}" style="max-width:${imageWidth}%;height:auto;display:block;margin:18px auto;" />`;
-      setHtmlBody((h) => (h.includes("{이미지}") ? h.replace("{이미지}", imgTag) : h + "\n" + imgTag));
-    }
   }
 
   async function onFooterImage(file: File | null) {
@@ -313,7 +318,11 @@ export default function Home() {
 
   async function doSend() {
     if (!user || !topicId) return;
-    const pw = sessionStorage.getItem("em_pw") || password;
+    const pw = password;
+    if (!pw) {
+      alert("앱 비밀번호가 없습니다. 다시 로그인해 주세요.");
+      return;
+    }
     const targets = recipients
       .filter((r) => selected.has(String(r.recipient_id)))
       .map((r) => ({
@@ -545,6 +554,9 @@ export default function Home() {
                 {useBodyImage && (
                   <div className="space-y-2 pl-1">
                     <input type="file" accept="image/*" onChange={(e) => onBodyImage(e.target.files?.[0] || null)} />
+                    <p className="text-xs text-ink-500">
+                      본문에 <code>{"{이미지}"}</code>를 넣으면 그 자리에, 없으면 본문 아래에 들어갑니다.
+                    </p>
                     <div className="flex items-center gap-2 text-sm">
                       <span className="text-ink-500">너비</span>
                       <input
@@ -648,6 +660,7 @@ export default function Home() {
             <iframe
               title="preview"
               className="w-full h-full bg-white"
+              sandbox="allow-popups"
               srcDoc={previewHtml || "<p style='padding:16px;color:#888'>미리보기</p>"}
             />
           </div>

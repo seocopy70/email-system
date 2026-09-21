@@ -36,11 +36,48 @@ def secrets_ok() -> bool:
         return False
 
 
+_QUOTES = "\"'\u201c\u201d\u2018\u2019"
+
+
 def _base_url() -> str:
-    url = str(_cfg()["url"]).strip().rstrip("/")
+    url = "".join(str(_cfg()["url"]).split()).strip(_QUOTES)  # 공백/줄바꿈/따옴표 제거
+    url = url.split("?", 1)[0].rstrip("/")
     if url.startswith("libsql://"):
         url = "https://" + url[len("libsql://"):]
     return url
+
+
+def _token() -> str:
+    """복사·붙여넣기 때 흔히 섞이는 공백, 줄바꿈, 따옴표, 'Bearer ' 접두어를 제거."""
+    t = "".join(str(_cfg()["auth_token"]).split()).strip(_QUOTES)
+    if t.lower().startswith("bearer"):
+        t = t[len("bearer"):]
+    return t.strip(_QUOTES)
+
+
+def diagnose() -> str:
+    """접속 실패 원인 파악용 요약 (토큰 값 자체는 노출하지 않음)."""
+    try:
+        raw = str(_cfg().get("auth_token", "") or "")
+        tok = _token()
+        host = _base_url().split("://", 1)[-1]
+        notes = []
+        if any(c.isspace() for c in raw):
+            notes.append("토큰에 공백/줄바꿈이 섞여 있었음(자동 제거함)")
+        if not tok.startswith("eyJ"):
+            notes.append("토큰이 eyJ로 시작하지 않음 → 토큰이 아닌 다른 값일 수 있음")
+        if tok.count(".") != 2:
+            notes.append(f"토큰의 점(.) 개수가 {tok.count('.')}개(정상은 2개) → 잘렸거나 다른 값")
+        start = "eyJ…" if tok.startswith("eyJ") else "eyJ 아님"
+        return (f"접속 대상: {host} · 토큰 길이 {len(tok)}자 · 시작 {start} · "
+                + ("; ".join(notes) or "토큰 형식은 정상"))
+    except Exception as e:
+        return f"설정 확인 중 오류: {e}"
+
+
+def ping() -> None:
+    """DB 연결/인증 확인 (실패하면 예외)."""
+    _rows("SELECT 1 AS ok")
 
 
 # ---------------------------------------------------------------- HTTP 전송
@@ -72,7 +109,7 @@ def _pipeline(stmts: list) -> list:
     reqs = [{"type": "execute", "stmt": {"sql": sql, "args": [_enc(a) for a in args]}}
             for sql, args in stmts]
     reqs.append({"type": "close"})
-    headers = {"Authorization": f"Bearer {_cfg()['auth_token']}"}
+    headers = {"Authorization": f"Bearer {_token()}"}
 
     last = None
     resp = None

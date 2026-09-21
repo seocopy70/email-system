@@ -503,6 +503,7 @@ try:
     db.init()  # 테이블 자동 생성 + 관리자 계정 등록 (프로세스당 1회)
 except Exception as e:
     st.error(f"Turso DB 초기화에 실패했습니다: {e}")
+    st.caption("🔎 " + db.diagnose())
     st.stop()
 
 if "auth" not in st.session_state:

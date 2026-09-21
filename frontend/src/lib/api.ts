@@ -1,13 +1,31 @@
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+// 로그인 후 발급받은 세션 토큰 (메모리에만 보관 — 새로고침하면 다시 로그인)
+let authToken: string | null = null;
+let onUnauthorized: (() => void) | null = null;
+
+export function setAuthToken(t: string | null) {
+  authToken = t;
+}
+
+export function setUnauthorizedHandler(fn: (() => void) | null) {
+  onUnauthorized = fn;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
       ...(init?.headers || {}),
     },
   });
+  if (res.status === 401 && authToken) {
+    // 세션 만료/무효: 로그인 화면으로
+    onUnauthorized?.();
+    throw new Error("세션이 만료되었습니다. 다시 로그인해 주세요.");
+  }
   if (!res.ok) {
     const text = await res.text();
     let msg: any = text;
@@ -28,6 +46,7 @@ export type AuthUser = {
   is_admin: boolean;
   sent_today: number;
   daily_limit: number;
+  token: string;
 };
 
 export const api = {

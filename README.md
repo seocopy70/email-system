@@ -18,7 +18,7 @@ cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# .env에 TURSO_URL, TURSO_AUTH_TOKEN, ADMIN_EMAIL 입력 후
+# .env에 TURSO_URL, TURSO_AUTH_TOKEN, ADMIN_EMAIL, SESSION_SECRET 입력 후
 export $(grep -v '^#' .env | xargs)
 uvicorn main:app --reload --port 8000
 ```
