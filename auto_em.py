@@ -312,13 +312,24 @@ def status_of(log):
 # 1. DB 연결 확인 + 로그인(발신자 입력 = 로그인)
 # ==========================================
 if not db.secrets_ok():
-    st.error("Supabase 접속 정보가 없습니다. `.streamlit/secrets.toml`(또는 배포 환경의 Secrets)에 [supabase] url / service_key 를 설정하세요.")
-    st.code('[supabase]\nurl = "https://xxxx.supabase.co"\nservice_key = "service_role 키"', language="toml")
+    st.error("Turso 접속 정보가 없습니다. `.streamlit/secrets.toml`(또는 배포 환경의 Secrets)에 [turso] 항목을 설정하세요.")
+    st.code('[turso]\nurl = "libsql://데이터베이스이름-조직.turso.io"\nauth_token = "토큰"\nadmin_email = "본인@gmail.com"', language="toml")
+    st.stop()
+
+try:
+    db.init()  # 테이블 자동 생성 + 관리자 계정 등록 (프로세스당 1회)
+except Exception as e:
+    st.error(f"Turso DB 초기화에 실패했습니다: {e}")
     st.stop()
 
 if "auth" not in st.session_state:
     st.subheader("🔐 발신자 로그인")
     st.caption("등록된 발신 계정만 사용할 수 있습니다. 구글 앱 비밀번호는 로그인 확인과 발송에만 쓰이며 DB에 저장되지 않습니다.")
+    try:
+        if db.count_senders() == 0:
+            st.warning("등록된 발신 계정이 없습니다. secrets의 [turso] admin_email에 본인 Gmail을 넣고 다시 실행하세요.")
+    except Exception:
+        pass
     with st.form("login_form"):
         login_email = st.text_input("Gmail 주소", placeholder="example@gmail.com")
         login_pw = st.text_input("구글 앱 비밀번호 (16자리)", type="password",

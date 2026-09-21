@@ -1,139 +1,278 @@
-"""공유 발송이력 DB 계층 (Supabase / Postgres)."""
+"""공유 발송이력 DB 계층 (Turso / libSQL, HTTP API 사용).
+
+별도 드라이버 없이 `requests`만으로 Turso의 HTTP 파이프라인 API(/v2/pipeline)를 호출합니다.
+테이블은 앱 시작 시 자동 생성되므로 Turso에서 SQL을 따로 실행할 필요가 없습니다.
+"""
 import time
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import requests
 import streamlit as st
-from supabase import Client, create_client
 
 KST = ZoneInfo("Asia/Seoul")
+STALE_PENDING_MIN = 30  # 이 시간 넘게 '발송중'이면 다시 선점 가능 (앱이 중간에 종료된 경우 대비)
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _now() -> str:
+    return _iso(datetime.now(timezone.utc))
+
+
+# ---------------------------------------------------------------- 연결 설정
+def _cfg() -> dict:
+    return st.secrets["turso"]
 
 
 def secrets_ok() -> bool:
     try:
-        cfg = st.secrets["supabase"]
-        return bool(cfg.get("url") and cfg.get("service_key"))
+        cfg = _cfg()
+        return bool(cfg.get("url") and cfg.get("auth_token"))
     except Exception:
         return False
 
 
+def _base_url() -> str:
+    url = str(_cfg()["url"]).strip().rstrip("/")
+    if url.startswith("libsql://"):
+        url = "https://" + url[len("libsql://"):]
+    return url
+
+
+# ---------------------------------------------------------------- HTTP 전송
+def _enc(v) -> dict:
+    if v is None:
+        return {"type": "null"}
+    if isinstance(v, bool):
+        return {"type": "integer", "value": str(int(v))}
+    if isinstance(v, int):
+        return {"type": "integer", "value": str(v)}
+    if isinstance(v, float):
+        return {"type": "float", "value": v}
+    return {"type": "text", "value": str(v)}
+
+
+def _dec(v: dict):
+    t = v.get("type")
+    if t == "null":
+        return None
+    if t == "integer":
+        return int(v["value"])
+    if t == "float":
+        return float(v["value"])
+    return v.get("value")
+
+
+def _pipeline(stmts: list) -> list:
+    """[(sql, args), ...]를 한 번의 HTTP 요청으로 순서대로 실행하고 결과 리스트를 반환."""
+    reqs = [{"type": "execute", "stmt": {"sql": sql, "args": [_enc(a) for a in args]}}
+            for sql, args in stmts]
+    reqs.append({"type": "close"})
+    headers = {"Authorization": f"Bearer {_cfg()['auth_token']}"}
+
+    last = None
+    resp = None
+    for attempt in range(3):
+        try:  # 요청이 서버에 닿기 전의 연결 오류만 재시도 (중복 실행 방지)
+            resp = requests.post(_base_url() + "/v2/pipeline", json={"requests": reqs},
+                                 headers=headers, timeout=30)
+            break
+        except requests.ConnectionError as e:
+            last = e
+            time.sleep(1 + attempt)
+        except requests.RequestException as e:
+            raise RuntimeError(f"Turso 요청 실패: {e}")
+    if resp is None:
+        raise RuntimeError(f"Turso 연결 실패: {last}")
+    if resp.status_code != 200:
+        raise RuntimeError(f"Turso HTTP {resp.status_code}: {resp.text[:300]}")
+
+    out = []
+    for item in resp.json().get("results", [])[:len(stmts)]:
+        if item.get("type") == "error":
+            raise RuntimeError(item.get("error", {}).get("message", "Turso 쿼리 오류"))
+        out.append(item["response"]["result"])
+    return out
+
+
+def _rows(sql: str, args: list = ()) -> list:
+    res = _pipeline([(sql, list(args))])[0]
+    names = [c["name"] for c in res.get("cols", [])]
+    return [dict(zip(names, [_dec(v) for v in row])) for row in res.get("rows", [])]
+
+
+def _exec(sql: str, args: list = ()):
+    return _pipeline([(sql, list(args))])[0]
+
+
+# ---------------------------------------------------------------- 스키마
+_SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS senders (
+        email        TEXT PRIMARY KEY,
+        display_name TEXT,
+        is_active    INTEGER NOT NULL DEFAULT 1,
+        is_admin     INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS topics (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL UNIQUE,
+        created_by TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS recipients (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        email      TEXT NOT NULL UNIQUE,
+        company    TEXT,
+        ceo        TEXT,
+        industry   TEXT,
+        rating     TEXT,
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS send_log (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        topic_id     INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+        recipient_id INTEGER NOT NULL REFERENCES recipients(id) ON DELETE CASCADE,
+        sender_email TEXT NOT NULL,
+        sender_name  TEXT,
+        status       TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending','sent','failed')),
+        subject      TEXT,
+        body_html    TEXT,
+        error        TEXT,
+        claimed_at   TEXT NOT NULL,
+        sent_at      TEXT,
+        UNIQUE (topic_id, recipient_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS send_log_topic_idx  ON send_log (topic_id, status)",
+    "CREATE INDEX IF NOT EXISTS send_log_sender_idx ON send_log (sender_email, sent_at)",
+]
+
+
 @st.cache_resource
-def client() -> Client:
-    cfg = st.secrets["supabase"]
-    return create_client(cfg["url"], cfg["service_key"])
+def init() -> bool:
+    """테이블 생성 + secrets의 admin_email을 관리자 발신 계정으로 등록(없을 때만)."""
+    _pipeline([(sql, []) for sql in _SCHEMA])
+    admin = str(_cfg().get("admin_email", "") or "").strip().lower()
+    if admin:
+        _exec("INSERT OR IGNORE INTO senders (email, display_name, is_active, is_admin) "
+              "VALUES (?, ?, 1, 1)", [admin, admin])
+    return True
 
 
-def _fetch_all(build, page: int = 1000) -> list:
-    """PostgREST 기본 1000행 제한을 넘어도 전부 가져오는 페이지네이션."""
-    rows, start = [], 0
-    while True:
-        data = build().range(start, start + page - 1).execute().data or []
-        rows.extend(data)
-        if len(data) < page:
-            return rows
-        start += page
-
-
-# ---------- 발신 계정 ----------
+# ---------------------------------------------------------------- 발신 계정
 def get_sender(email: str):
-    res = (client().table("senders").select("*")
-           .eq("email", email.strip().lower()).limit(1).execute())
-    return res.data[0] if res.data else None
+    rows = _rows("SELECT email, display_name, is_active, is_admin FROM senders WHERE email = ?",
+                 [email.strip().lower()])
+    if not rows:
+        return None
+    r = rows[0]
+    r["is_active"] = bool(r["is_active"])
+    r["is_admin"] = bool(r["is_admin"])
+    return r
+
+
+def count_senders() -> int:
+    return _rows("SELECT COUNT(*) AS n FROM senders")[0]["n"]
 
 
 def list_senders() -> list:
-    return client().table("senders").select("*").order("email").execute().data or []
+    rows = _rows("SELECT email, display_name, is_active, is_admin FROM senders ORDER BY email")
+    for r in rows:
+        r["is_active"] = bool(r["is_active"])
+        r["is_admin"] = bool(r["is_admin"])
+    return rows
 
 
 def upsert_sender(email: str, display_name: str, is_admin: bool, is_active: bool):
-    client().table("senders").upsert({
-        "email": email.strip().lower(),
-        "display_name": display_name.strip() or None,
-        "is_admin": is_admin,
-        "is_active": is_active,
-    }, on_conflict="email").execute()
+    _exec("""INSERT INTO senders (email, display_name, is_active, is_admin) VALUES (?, ?, ?, ?)
+             ON CONFLICT(email) DO UPDATE SET
+               display_name = excluded.display_name,
+               is_active    = excluded.is_active,
+               is_admin     = excluded.is_admin""",
+          [email.strip().lower(), display_name.strip() or None, int(is_active), int(is_admin)])
 
 
-# ---------- 주제 ----------
+# ---------------------------------------------------------------- 주제
 def list_topics() -> list:
-    return (client().table("topics").select("id,name,created_at")
-            .order("created_at", desc=True).execute().data or [])
+    return _rows("SELECT id, name, created_at FROM topics ORDER BY created_at DESC, id DESC")
 
 
 def create_topic(name: str, created_by: str) -> int:
     name = name.strip()
-    client().table("topics").upsert(
-        {"name": name, "created_by": created_by},
-        on_conflict="name", ignore_duplicates=True).execute()
-    got = client().table("topics").select("id").eq("name", name).limit(1).execute()
-    return got.data[0]["id"]
+    _exec("INSERT OR IGNORE INTO topics (name, created_by, created_at) VALUES (?, ?, ?)",
+          [name, created_by, _now()])
+    return _rows("SELECT id FROM topics WHERE name = ?", [name])[0]["id"]
 
 
-# ---------- 수신자 ----------
+# ---------------------------------------------------------------- 수신자
+_UPSERT_RECIPIENT = """INSERT INTO recipients (email, company, ceo, industry, rating, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(email) DO UPDATE SET
+      company = excluded.company, ceo = excluded.ceo, industry = excluded.industry,
+      rating = excluded.rating, updated_at = excluded.updated_at
+    RETURNING id, email"""
+
+
 def upsert_recipients(df) -> dict:
     """엑셀 명단을 recipients에 반영하고 {이메일: id}를 돌려줍니다."""
-    recs = [{
-        "email": r["이메일"],
-        "company": str(r["회사명"]),
-        "ceo": str(r["대표자명"]),
-        "industry": str(r["산업분류"]),
-        "rating": str(r["AI_판정"]),
-        "updated_at": _now_iso(),
-    } for _, r in df.iterrows()]
-
+    now = _now()
+    stmts = [(_UPSERT_RECIPIENT, [r["이메일"], str(r["회사명"]), str(r["대표자명"]),
+                                   str(r["산업분류"]), str(r["AI_판정"]), now])
+             for _, r in df.iterrows()]
     id_map = {}
-    for i in range(0, len(recs), 500):
-        res = client().table("recipients").upsert(
-            recs[i:i + 500], on_conflict="email").execute()
-        for row in res.data or []:
-            id_map[row["email"]] = row["id"]
-
-    missing = [r["email"] for r in recs if r["email"] not in id_map]
-    for i in range(0, len(missing), 100):
-        res = (client().table("recipients").select("id,email")
-               .in_("email", missing[i:i + 100]).execute())
-        for row in res.data or []:
-            id_map[row["email"]] = row["id"]
+    for i in range(0, len(stmts), 100):
+        for res in _pipeline(stmts[i:i + 100]):
+            for row in res.get("rows", []):
+                id_map[_dec(row[1])] = _dec(row[0])
     return id_map
 
 
 def count_recipients() -> int:
-    res = client().table("recipients").select("id", count="exact").limit(1).execute()
-    return res.count or 0
+    return _rows("SELECT COUNT(*) AS n FROM recipients")[0]["n"]
 
 
-# ---------- 발송 기록 ----------
+# ---------------------------------------------------------------- 발송 기록
 def topic_status(topic_id: int) -> dict:
     """{recipient_id: 로그행} — 상태 표시용(본문 제외)."""
-    rows = _fetch_all(lambda: (
-        client().table("send_log")
-        .select("id,recipient_id,status,sender_email,sender_name,sent_at,claimed_at")
-        .eq("topic_id", topic_id).order("id")))
+    rows = _rows("""SELECT id, recipient_id, status, sender_email, sender_name, sent_at, claimed_at
+                    FROM send_log WHERE topic_id = ?""", [topic_id])
     return {r["recipient_id"]: r for r in rows}
 
 
 def claim_send(topic_id: int, recipient_id: int, sender_email: str, sender_name: str):
-    """발송 권한 선점. 성공 시 log id, 이미 처리됐거나 진행 중이면 None."""
-    res = client().rpc("claim_send", {
-        "p_topic": topic_id, "p_recipient": recipient_id,
-        "p_sender": sender_email, "p_sender_name": sender_name,
-    }).execute()
-    data = res.data
-    if isinstance(data, list):
-        data = data[0] if data else None
-    return data
+    """발송 권한 선점(단일 SQL문이라 원자적).
+
+    성공 시 log id, 이미 발송됐거나 다른 계정이 진행 중이면 None.
+    실패(failed) 건과 오래된 발송중(pending) 건은 다시 선점할 수 있습니다.
+    """
+    now = datetime.now(timezone.utc)
+    rows = _rows("""INSERT INTO send_log
+                      (topic_id, recipient_id, sender_email, sender_name, status, claimed_at)
+                    VALUES (?, ?, ?, ?, 'pending', ?)
+                    ON CONFLICT (topic_id, recipient_id) DO UPDATE SET
+                      sender_email = excluded.sender_email,
+                      sender_name  = excluded.sender_name,
+                      status       = 'pending',
+                      error        = NULL,
+                      claimed_at   = excluded.claimed_at
+                    WHERE send_log.status = 'failed'
+                       OR (send_log.status = 'pending' AND send_log.claimed_at < ?)
+                    RETURNING id""",
+                 [topic_id, recipient_id, sender_email, sender_name, _iso(now),
+                  _iso(now - timedelta(minutes=STALE_PENDING_MIN))])
+    return rows[0]["id"] if rows else None
 
 
-def _update_with_retry(log_id: int, values: dict, tries: int = 3):
+def _update_with_retry(sql: str, args: list, tries: int = 3):
     last = None
     for n in range(tries):
         try:
-            client().table("send_log").update(values).eq("id", log_id).execute()
+            _exec(sql, args)
             return
         except Exception as e:  # 네트워크 일시 오류 대비
             last = e
@@ -142,40 +281,48 @@ def _update_with_retry(log_id: int, values: dict, tries: int = 3):
 
 
 def mark_sent(log_id: int, subject: str, body_html: str):
-    _update_with_retry(log_id, {
-        "status": "sent", "subject": subject, "body_html": body_html,
-        "sent_at": _now_iso(), "error": None})
+    _update_with_retry(
+        "UPDATE send_log SET status='sent', subject=?, body_html=?, sent_at=?, error=NULL WHERE id=?",
+        [subject, body_html, _now(), log_id])
 
 
 def mark_failed(log_id: int, error: str):
-    _update_with_retry(log_id, {"status": "failed", "error": error[:500]})
+    _update_with_retry("UPDATE send_log SET status='failed', error=? WHERE id=?",
+                       [error[:500], log_id])
 
 
 def all_log_lite() -> list:
-    return _fetch_all(lambda: (
-        client().table("send_log").select("id,topic_id,status,sender_email").order("id")))
+    return _rows("SELECT id, topic_id, status, sender_email FROM send_log")
 
 
 def sent_today_by_sender() -> Counter:
     start_kst = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
-    start_utc = start_kst.astimezone(timezone.utc).isoformat()
-    rows = _fetch_all(lambda: (
-        client().table("send_log").select("id,sender_email")
-        .eq("status", "sent").gte("sent_at", start_utc).order("id")))
-    return Counter(r["sender_email"] for r in rows)
+    rows = _rows("""SELECT sender_email, COUNT(*) AS n FROM send_log
+                    WHERE status = 'sent' AND sent_at >= ? GROUP BY sender_email""",
+                 [_iso(start_kst)])
+    return Counter({r["sender_email"]: r["n"] for r in rows})
 
 
 def log_detail(topic_id: int, sender_email: str = None, limit: int = 200) -> list:
-    q = (client().table("send_log")
-         .select("id,status,subject,sender_email,sender_name,sent_at,claimed_at,error,"
-                 "recipients(email,company,ceo)")
-         .eq("topic_id", topic_id))
+    sql = """SELECT l.id, l.status, l.subject, l.sender_email, l.sender_name, l.sent_at,
+                    l.claimed_at, l.error,
+                    r.email AS r_email, r.company AS r_company, r.ceo AS r_ceo
+             FROM send_log l JOIN recipients r ON r.id = l.recipient_id
+             WHERE l.topic_id = ?"""
+    args = [topic_id]
     if sender_email:
-        q = q.eq("sender_email", sender_email)
-    return q.order("claimed_at", desc=True).limit(limit).execute().data or []
+        sql += " AND l.sender_email = ?"
+        args.append(sender_email)
+    sql += " ORDER BY l.claimed_at DESC, l.id DESC LIMIT ?"
+    args.append(limit)
+    out = []
+    for r in _rows(sql, args):
+        r["recipients"] = {"email": r.pop("r_email"), "company": r.pop("r_company"),
+                           "ceo": r.pop("r_ceo")}
+        out.append(r)
+    return out
 
 
 def get_body(log_id: int) -> str:
-    res = (client().table("send_log").select("body_html")
-           .eq("id", log_id).limit(1).execute())
-    return (res.data[0]["body_html"] if res.data else "") or ""
+    rows = _rows("SELECT body_html FROM send_log WHERE id = ?", [log_id])
+    return (rows[0]["body_html"] if rows else "") or ""
