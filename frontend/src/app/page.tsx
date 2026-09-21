@@ -386,9 +386,16 @@ export default function Home() {
             <h1 className="text-lg font-semibold">기업 이메일 발송 시스템</h1>
             <p className="text-sm text-ink-500 mt-1">등록된 Gmail + 앱 비밀번호로 로그인</p>
           </div>
-          <input className="input" placeholder="Gmail" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
-          <input className="input" type="password" placeholder="앱 비밀번호" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <input className="input" placeholder="표시 이름 (선택)" value={loginName} onChange={(e) => setLoginName(e.target.value)} />
+          <input className="input" placeholder="Gmail" autoComplete="username" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
+          <input
+            className="input"
+            type="password"
+            placeholder="앱 비밀번호"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <input className="input" placeholder="표시 이름 (선택)" autoComplete="off" value={loginName} onChange={(e) => setLoginName(e.target.value)} />
           {loginErr && <p className="text-sm text-red-600">{loginErr}</p>}
           <button className="btn-primary w-full" disabled={busy} onClick={doLogin}>
             {busy ? "확인 중…" : "로그인"}

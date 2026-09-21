@@ -15,6 +15,36 @@ import db
 
 st.set_page_config(page_title="기업 이메일 발송 시스템", layout="wide")
 
+# 구글 앱 비밀번호는 정해진 16자리를 그대로 넣어야 하므로, 브라우저가 새 비밀번호로
+# 오인해 "안전한 비밀번호 제안"을 띄우지 않도록 autocomplete 속성을 보정합니다.
+# (Streamlit의 text_input은 이 속성을 직접 지정할 방법이 없어 스크립트로 보정)
+st.iframe(
+    """
+    <script>
+    (function () {
+      function fixAutocomplete() {
+        var doc = window.parent.document;
+        doc.querySelectorAll('input[type="password"]').forEach(function (el) {
+          if (el.getAttribute('autocomplete') !== 'current-password') {
+            el.setAttribute('autocomplete', 'current-password');
+          }
+        });
+        doc.querySelectorAll('input[aria-label="Gmail 주소"]').forEach(function (el) {
+          if (el.getAttribute('autocomplete') !== 'username') {
+            el.setAttribute('autocomplete', 'username');
+          }
+        });
+      }
+      fixAutocomplete();
+      new MutationObserver(fixAutocomplete).observe(window.parent.document.body, {
+        childList: true, subtree: true,
+      });
+    })();
+    </script>
+    """,
+    height=1,
+)
+
 st.markdown("""
 <style>
 /* 전체 여백·타이포 */
