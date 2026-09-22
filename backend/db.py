@@ -289,6 +289,19 @@ def set_topic_preset(topic_id: int, default_preset: str):
           [default_preset or None, topic_id])
 
 
+def delete_topic(topic_id: int):
+    """주제를 삭제합니다. 연결된 발송 기록(send_log)도 함께 삭제됩니다.
+
+    Turso(libSQL) 연결은 요청마다 새로 맺어져 `PRAGMA foreign_keys`가 이어지지
+    않을 수 있으므로, ON DELETE CASCADE에 기대지 않고 두 삭제를 한 번의
+    파이프라인 요청으로 함께 보냅니다.
+    """
+    _pipeline([
+        ("DELETE FROM send_log WHERE topic_id = ?", [topic_id]),
+        ("DELETE FROM topics WHERE id = ?", [topic_id]),
+    ])
+
+
 # ---------------------------------------------------------------- 발신자 기본 설정
 def get_sender_prefs(email: str) -> dict:
     rows = _rows("SELECT * FROM sender_prefs WHERE email = ?", [email.strip().lower()])

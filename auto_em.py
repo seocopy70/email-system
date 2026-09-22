@@ -39,6 +39,28 @@ st.iframe(
       new MutationObserver(fixAutocomplete).observe(window.parent.document.body, {
         childList: true, subtree: true,
       });
+
+      // 셀렉트박스/라디오 등을 고르면(예: 변수 삽입, 템플릿 선택) 그 값이
+      // 다른 입력창(제목/본문 등)에 프로그램적으로 반영되면서, 사용자가
+      // 직접 탭하지 않은 그 입력창으로 포커스가 넘어가 모바일 키보드가
+      // 갑자기 뜨는 현상을 막습니다. 실제로 손가락/클릭이 닿은 요소로
+      // 옮겨가는 포커스만 허용하고, 나머지는 즉시 블러 처리합니다.
+      var lastPointerTarget = null;
+      var allowKeyboardFocus = false;
+      doc.addEventListener('pointerdown', function (e) { lastPointerTarget = e.target; }, true);
+      doc.addEventListener('keydown', function (e) {
+        if (e.key === 'Tab') allowKeyboardFocus = true;
+      }, true);
+      doc.addEventListener('focusin', function (e) {
+        var el = e.target;
+        var tag = el.tagName;
+        var textTypes = ['text', 'password', 'search', 'email', 'url', 'tel', ''];
+        var isTextField = tag === 'TEXTAREA' || (tag === 'INPUT' && textTypes.indexOf(el.type) !== -1);
+        if (!isTextField) return;
+        if (allowKeyboardFocus) { allowKeyboardFocus = false; return; }
+        if (lastPointerTarget && el.contains(lastPointerTarget)) return;
+        el.blur();
+      }, true);
     })();
     </script>
     """,
@@ -742,6 +764,11 @@ def _on_new_topic():
         st.session_state["_last_topic_for_preset"] = tid
     except Exception as e:
         st.session_state["topic_error"] = str(e)
+        return
+    # 새 주제 목록은 이 함수 바깥(전체 스크립트 상단)에서 한 번만 불러오므로,
+    # 이 안에서 끝내면(기본 fragment 전용 재실행) 방금 만든 주제가 선택 목록에
+    # 아직 안 보인다. 전체를 다시 실행해 목록을 최신으로 갱신한다.
+    st.rerun()
 
 
 def _on_template_change():
@@ -769,11 +796,14 @@ def _on_template_change():
 # 좌측 편집 | 우측 미리보기  (fragment: 옵션 변경 시 이 영역만 갱신)
 # ==========================================
 def _compose_and_preview():
-    left, right = st.columns([1, 1], gap="large")
+    # 모바일 폭에서는 두 칸이 위→아래로 쌓이는데, 원래 순서대로면 편집 화면을
+    # 전부 내려야 미리보기가 나왔다. 미리보기가 먼저(위쪽) 보이도록 이 두 칸에
+    # 담을 내용(아래의 with left / with right)은 그대로 두고 변수만 서로 바꿔 묶는다.
+    right, left = st.columns([1, 1], gap="large")
 
     with left:
-        st.markdown('<div class="dash-card"><div class="dash-card-title">발송 주제</div>', unsafe_allow_html=True)
-        t1, t2 = st.columns([1.4, 1])
+        st.markdown('<div class="dash-card">', unsafe_allow_html=True)
+        t1, t2, t3 = st.columns([1.3, 1, 0.3])
         with t1:
             if topics:
                 topic_id = st.selectbox(
@@ -787,6 +817,28 @@ def _compose_and_preview():
             st.text_input(
                 "새 주제", key="new_topic_name", placeholder="새 주제 입력 후 Enter",
                 on_change=_on_new_topic, label_visibility="collapsed")
+        with t3:
+            if topic_id is not None:
+                if st.button("🗑", key="del_topic_btn", help="이 주제 삭제",
+                             use_container_width=True):
+                    st.session_state["confirm_delete_topic"] = topic_id
+        if st.session_state.get("confirm_delete_topic") == topic_id and topic_id is not None:
+            st.warning(f"「{topic_names[topic_id]}」 주제와 발송 기록을 모두 삭제할까요? 되돌릴 수 없습니다.")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("삭제", key="confirm_del_topic", type="primary", use_container_width=True):
+                    try:
+                        db.delete_topic(topic_id)
+                        st.session_state.pop("confirm_delete_topic", None)
+                        st.session_state.pop("topic_id_sel", None)
+                        st.session_state.pop("_last_topic_for_preset", None)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"삭제 실패: {e}")
+            with c2:
+                if st.button("취소", key="cancel_del_topic", use_container_width=True):
+                    st.session_state.pop("confirm_delete_topic", None)
+                    st.rerun()
         if st.session_state.get("topic_error"):
             st.error(st.session_state.pop("topic_error"))
         st.markdown("</div>", unsafe_allow_html=True)
@@ -802,21 +854,48 @@ def _compose_and_preview():
                     apply_preset(f"★ {linked}", custom=db.get_mail_template(sender_email, linked))
                 st.session_state["_last_topic_for_preset"] = topic_id
 
-        st.markdown('<div class="dash-card"><div class="dash-card-title">메일 작성</div>', unsafe_allow_html=True)
+        st.markdown('<div class="dash-card">', unsafe_allow_html=True)
 
         cur = st.session_state.get("active_preset", "기본형")
         if cur not in all_tmpl_opts:
             cur = "기본형"
-        c_tmpl, c_save = st.columns([3, 1])
+        is_user_tmpl = cur.startswith("★ ")
+        # selectbox는 key가 한 번 쓰이고 나면 index= 인자를 매번 무시하고 이전
+        # 선택값을 그대로 유지하므로, 템플릿 저장/삭제 등으로 active_preset이
+        # 바뀐 경우 위젯 값을 직접 맞춰줘야 드롭다운에도 바로 반영된다.
+        st.session_state["template_picker"] = cur
+        c_tmpl, c_save, c_del = st.columns([2.6, 0.9, 0.4])
         with c_tmpl:
             st.selectbox(
                 "템플릿", all_tmpl_opts,
-                index=all_tmpl_opts.index(cur) if cur in all_tmpl_opts else 0,
                 key="template_picker", on_change=_on_template_change,
                 label_visibility="collapsed")
         with c_save:
             if st.button("저장", use_container_width=True, help="현재 내용을 템플릿으로 저장"):
                 st.session_state["show_save_tmpl_form"] = True
+        with c_del:
+            if is_user_tmpl:
+                if st.button("🗑", key="del_tmpl_btn", help="이 템플릿 삭제",
+                             use_container_width=True):
+                    st.session_state["confirm_delete_tmpl"] = cur
+
+        if st.session_state.get("confirm_delete_tmpl") == cur and is_user_tmpl:
+            st.warning(f"「{cur[2:]}」 템플릿을 삭제할까요? 되돌릴 수 없습니다.")
+            d1, d2 = st.columns(2)
+            with d1:
+                if st.button("삭제", key="confirm_del_tmpl", type="primary", use_container_width=True):
+                    try:
+                        db.delete_mail_template(sender_email, cur[2:])
+                        st.session_state.pop("confirm_delete_tmpl", None)
+                        st.session_state["active_preset"] = "기본형"
+                        apply_preset("기본형")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"삭제 실패: {e}")
+            with d2:
+                if st.button("취소", key="cancel_del_tmpl", use_container_width=True):
+                    st.session_state.pop("confirm_delete_tmpl", None)
+                    st.rerun()
 
         if st.session_state.get("show_save_tmpl_form"):
             with st.form("save_tmpl_form", clear_on_submit=False):
