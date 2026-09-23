@@ -44,7 +44,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins or ["*"],
     allow_credentials=False,  # 쿠키가 아니라 Authorization 헤더로 인증
-    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -64,6 +64,7 @@ class TopicCreate(BaseModel):
 
 class TemplateSave(BaseModel):
     owner_email: Optional[str] = None  # 무시/검증됨 (본인 것만 저장 가능)
+    topic_id: int  # 템플릿은 주제별로 따로 저장됨
     name: str
     subject: str = ""
     body_mode: str = "html"
@@ -364,8 +365,9 @@ def set_preset(topic_id: int, preset: str, user: dict = Depends(current_user)):
 
 
 @app.get("/api/templates")
-def list_templates(owner_email: Optional[str] = None, user: dict = Depends(current_user)):
-    return db.list_mail_templates(_own(user, owner_email))
+def list_templates(topic_id: int, owner_email: Optional[str] = None,
+                   user: dict = Depends(current_user)):
+    return db.list_mail_templates(_own(user, owner_email), topic_id)
 
 
 @app.post("/api/templates")
@@ -373,16 +375,27 @@ def save_template(body: TemplateSave, user: dict = Depends(current_user)):
     name = body.name.strip()
     if not name or len(name) > 100:
         raise HTTPException(400, "템플릿 이름을 1~100자로 입력해 주세요")
-    tid = db.save_mail_template(_own(user, body.owner_email), name, body.model_dump())
+    tid = db.save_mail_template(_own(user, body.owner_email), body.topic_id, name,
+                                body.model_dump())
     return {"id": tid}
 
 
 @app.get("/api/templates/{name}")
-def get_template(name: str, owner_email: Optional[str] = None, user: dict = Depends(current_user)):
-    t = db.get_mail_template(_own(user, owner_email), name)
+def get_template(name: str, topic_id: int, owner_email: Optional[str] = None,
+                 user: dict = Depends(current_user)):
+    t = db.get_mail_template(_own(user, owner_email), topic_id, name)
     if not t:
         raise HTTPException(404, "템플릿 없음")
     return t
+
+
+@app.delete("/api/topics/{topic_id}")
+def delete_topic(topic_id: int, user: dict = Depends(current_user)):
+    try:
+        db.delete_topic(topic_id)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {"ok": True}
 
 
 @app.get("/api/senders")

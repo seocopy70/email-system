@@ -202,6 +202,7 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS mail_templates (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         owner_email  TEXT NOT NULL,
+        topic_id     INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
         name         TEXT NOT NULL,
         subject      TEXT,
         body_mode    TEXT DEFAULT 'html',
@@ -211,7 +212,7 @@ _SCHEMA = [
         image_width_pct   INTEGER DEFAULT 80,
         image_align       TEXT DEFAULT '가운데',
         created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-        UNIQUE (owner_email, name)
+        UNIQUE (owner_email, topic_id, name)
     )""",
     "CREATE INDEX IF NOT EXISTS send_log_topic_idx  ON send_log (topic_id, status)",
     "CREATE INDEX IF NOT EXISTS send_log_sender_idx ON send_log (sender_email, sent_at)",
@@ -221,6 +222,50 @@ _SCHEMA = [
 _MIGRATIONS = [
     "ALTER TABLE topics ADD COLUMN default_preset TEXT",
 ]
+
+_MAIL_TEMPLATES_RECREATE_SQL = (
+    "CREATE TABLE mail_templates ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "owner_email TEXT NOT NULL, "
+    "topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE, "
+    "name TEXT NOT NULL, "
+    "subject TEXT, "
+    "body_mode TEXT DEFAULT 'html', "
+    "plain_body TEXT, "
+    "html_body TEXT, "
+    "image_insert_mode TEXT, "
+    "image_width_pct INTEGER DEFAULT 80, "
+    "image_align TEXT DEFAULT '가운데', "
+    "created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')), "
+    "UNIQUE (owner_email, topic_id, name))"
+)
+
+
+def _migrate_mail_templates_to_topic_scoped() -> None:
+    """mail_templates를 주제(topic)별로 나눠 저장하도록 표 구조를 바꾼다.
+
+    예전 표는 (owner_email, name)만으로 유일했는데, 이제는
+    (owner_email, topic_id, name)으로 바뀌어 같은 이름이라도 주제마다
+    따로 저장할 수 있다. 이미 topic_id 컬럼이 있으면(=이미 마이그레이션
+    됐으면) 아무 것도 하지 않는다. SQLite/libSQL은 UNIQUE 제약을 ALTER로
+    못 바꾸므로 표를 새로 만들어 옮기고 바꿔치기한다. 예전에 저장된
+    템플릿은 어느 주제에도 속하지 않게(topic_id NULL) 옮겨지며, 데이터는
+    지워지지 않지만 새 목록에는 나타나지 않는다.
+    """
+    cols = _rows("PRAGMA table_info(mail_templates)")
+    if any(c["name"] == "topic_id" for c in cols):
+        return
+    _pipeline([
+        ("ALTER TABLE mail_templates RENAME TO mail_templates_old_precopy", []),
+        (_MAIL_TEMPLATES_RECREATE_SQL, []),
+        ("""INSERT INTO mail_templates
+                (id, owner_email, topic_id, name, subject, body_mode, plain_body,
+                 html_body, image_insert_mode, image_width_pct, image_align, created_at)
+             SELECT id, owner_email, NULL, name, subject, body_mode, plain_body,
+                 html_body, image_insert_mode, image_width_pct, image_align, created_at
+             FROM mail_templates_old_precopy""", []),
+        ("DROP TABLE mail_templates_old_precopy", []),
+    ])
 
 
 @st.cache_resource
@@ -232,6 +277,7 @@ def init() -> bool:
             _exec(mig)
         except Exception:
             pass  # 컬럼이 이미 있으면 오류 → 무시
+    _migrate_mail_templates_to_topic_scoped()
     admin = str(_cfg().get("admin_email", "") or "").strip().lower()
     if admin:
         _exec("INSERT OR IGNORE INTO senders (email, display_name, is_active, is_admin) "
@@ -289,15 +335,24 @@ def set_topic_preset(topic_id: int, default_preset: str):
           [default_preset or None, topic_id])
 
 
-def delete_topic(topic_id: int):
-    """주제를 삭제합니다. 연결된 발송 기록(send_log)도 함께 삭제됩니다.
+def topic_has_send_history(topic_id: int) -> bool:
+    """이 주제로 한 번이라도 발송을 시도한 기록(성공/실패/진행중 모두)이 있는지."""
+    rows = _rows("SELECT 1 AS x FROM send_log WHERE topic_id = ? LIMIT 1", [topic_id])
+    return bool(rows)
 
-    Turso(libSQL) 연결은 요청마다 새로 맺어져 `PRAGMA foreign_keys`가 이어지지
-    않을 수 있으므로, ON DELETE CASCADE에 기대지 않고 두 삭제를 한 번의
-    파이프라인 요청으로 함께 보냅니다.
+
+def delete_topic(topic_id: int):
+    """주제를 삭제합니다. 발송 기록이 하나라도 있으면 삭제하지 않고
+    예외를 발생시킵니다 (화면에서도 미리 막지만, 동시 접속 등에 대비한
+    이중 안전장치). 템플릿(mail_templates)은 topic_id에 ON DELETE CASCADE가
+    걸려 있어 함께 지워집니다.
     """
+    if topic_has_send_history(topic_id):
+        raise ValueError("발송 기록이 있는 주제는 삭제할 수 없습니다.")
+    # mail_templates의 topic_id FK는 CASCADE이지만, libSQL 연결이 요청마다 새로
+    # 맺어져 PRAGMA foreign_keys가 이어지지 않을 수 있어 명시적으로도 함께 지운다.
     _pipeline([
-        ("DELETE FROM send_log WHERE topic_id = ?", [topic_id]),
+        ("DELETE FROM mail_templates WHERE topic_id = ?", [topic_id]),
         ("DELETE FROM topics WHERE id = ?", [topic_id]),
     ])
 
@@ -463,22 +518,23 @@ def get_body(log_id: int) -> str:
 
 
 # ---------------------------------------------------------------- 사용자 메일 템플릿
-def list_mail_templates(owner_email: str) -> list:
+def list_mail_templates(owner_email: str, topic_id: int) -> list:
+    """이 발신자가 이 주제 안에 저장한 템플릿 목록 (주제별로 따로 저장됨)."""
     return _rows(
         "SELECT id, name, subject, body_mode, plain_body, html_body, "
         "image_insert_mode, image_width_pct, image_align, created_at "
-        "FROM mail_templates WHERE owner_email = ? ORDER BY name",
-        [owner_email.strip().lower()])
+        "FROM mail_templates WHERE owner_email = ? AND topic_id = ? ORDER BY name",
+        [owner_email.strip().lower(), topic_id])
 
 
-def save_mail_template(owner_email: str, name: str, data: dict) -> int:
+def save_mail_template(owner_email: str, topic_id: int, name: str, data: dict) -> int:
     name = name.strip()
     owner = owner_email.strip().lower()
     _exec("""INSERT INTO mail_templates (
-                owner_email, name, subject, body_mode, plain_body, html_body,
+                owner_email, topic_id, name, subject, body_mode, plain_body, html_body,
                 image_insert_mode, image_width_pct, image_align, created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(owner_email, name) DO UPDATE SET
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(owner_email, topic_id, name) DO UPDATE SET
                 subject = excluded.subject,
                 body_mode = excluded.body_mode,
                 plain_body = excluded.plain_body,
@@ -486,21 +542,21 @@ def save_mail_template(owner_email: str, name: str, data: dict) -> int:
                 image_insert_mode = excluded.image_insert_mode,
                 image_width_pct = excluded.image_width_pct,
                 image_align = excluded.image_align""",
-          [owner, name, data.get("subject"), data.get("body_mode", "html"),
+          [owner, topic_id, name, data.get("subject"), data.get("body_mode", "html"),
            data.get("plain_body"), data.get("html_body"),
            data.get("image_insert_mode"), int(data.get("image_width_pct") or 80),
            data.get("image_align") or "가운데", _now()])
-    return _rows("SELECT id FROM mail_templates WHERE owner_email = ? AND name = ?",
-                 [owner, name])[0]["id"]
+    return _rows("SELECT id FROM mail_templates WHERE owner_email = ? AND topic_id = ? AND name = ?",
+                 [owner, topic_id, name])[0]["id"]
 
 
-def get_mail_template(owner_email: str, name: str) -> dict:
+def get_mail_template(owner_email: str, topic_id: int, name: str) -> dict:
     rows = _rows(
-        "SELECT * FROM mail_templates WHERE owner_email = ? AND name = ?",
-        [owner_email.strip().lower(), name.strip()])
+        "SELECT * FROM mail_templates WHERE owner_email = ? AND topic_id = ? AND name = ?",
+        [owner_email.strip().lower(), topic_id, name.strip()])
     return rows[0] if rows else {}
 
 
-def delete_mail_template(owner_email: str, name: str):
-    _exec("DELETE FROM mail_templates WHERE owner_email = ? AND name = ?",
-          [owner_email.strip().lower(), name.strip()])
+def delete_mail_template(owner_email: str, topic_id: int, name: str):
+    _exec("DELETE FROM mail_templates WHERE owner_email = ? AND topic_id = ? AND name = ?",
+          [owner_email.strip().lower(), topic_id, name.strip()])

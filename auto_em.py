@@ -319,6 +319,17 @@ SAMPLE_ROW = {
     "AI_판정": "A", "이메일": "sample@example.com",
 }
 
+# 아무것도 고르거나 입력하지 않은 빈 칸에 회색으로 보여줄 기본 예시.
+# placeholder로도 쓰고, 미리보기가 빈 칸을 채울 때도 이 값을 그대로 쓴다.
+_EXAMPLE_PRESET = EMAIL_PRESETS["기본형"]
+EXAMPLE_SUBJECT = _EXAMPLE_PRESET["subject"]
+EXAMPLE_PLAIN_BODY = _EXAMPLE_PRESET["plain_body"]
+EXAMPLE_HTML_BODY = _EXAMPLE_PRESET["html_body"]
+EXAMPLE_FOOTER_TEXT = "감사합니다.\n{발신자}"
+
+# 템플릿 드롭다운의 첫 항목: 아무 템플릿도 적용하지 않고 직접 쓰는 상태
+NO_TEMPLATE = "직접 작성"
+
 
 def apply_preset(preset_name: str, custom: dict = None):
     """내장/사용자 템플릿을 session_state에 반영"""
@@ -346,6 +357,14 @@ def apply_preset(preset_name: str, custom: dict = None):
     st.session_state["image_width_pct"] = preset["image_width_pct"]
     st.session_state["image_align"] = preset["image_align"]
     st.session_state["active_preset"] = preset_name
+
+
+def clear_compose_fields():
+    """아무 템플릿도 선택하지 않은 '직접 작성' 상태로 되돌린다 (빈 칸 + 회색 예시)."""
+    st.session_state["email_subject_template"] = ""
+    st.session_state["email_body_template"] = ""
+    st.session_state["email_html_template"] = ""
+    st.session_state["active_preset"] = NO_TEMPLATE
 
 
 def _append_to_field(field_key: str, text: str):
@@ -440,6 +459,13 @@ def build_email_html(row, subject_tmpl, body_tmpl, sender_nm, html_tmpl="", use_
     """본문/푸터 이미지를 별도로 반영한 최종 HTML 메일 생성"""
     subj = replace_email_placeholders(subject_tmpl, row, sender_nm)
     marker_mode = image_insert_mode == "본문 중간 삽입 (마커: {이미지})"
+    if not has_body_image:
+        # 이미지를 쓰지 않을 땐 마커 글자가 본문에 그대로 남지 않게 지운다.
+        body_tmpl = (body_tmpl or "").replace("{이미지}", "")
+        html_tmpl = (html_tmpl or "").replace("{이미지}", "")
+    if not has_footer_image:
+        footer_text_tmpl = (footer_text_tmpl or "").replace("{푸터이미지}", "")
+        footer_html_tmpl = (footer_html_tmpl or "").replace("{푸터이미지}", "")
 
     body_sections = []
     if use_plain_text and body_tmpl:
@@ -743,13 +769,9 @@ except Exception as e:
 
 topic_names = {t["id"]: t["name"] for t in topics}
 topic_presets = {t["id"]: t.get("default_preset") for t in topics}
-
-try:
-    user_tmpls = db.list_mail_templates(sender_email)
-except Exception:
-    user_tmpls = []
-user_tmpl_names = [t["name"] for t in user_tmpls]
-all_tmpl_opts = list(EMAIL_PRESETS.keys()) + [f"★ {n}" for n in user_tmpl_names]
+# 템플릿은 주제별로 따로 저장되므로, 어느 주제가 선택됐는지 알아야 목록을
+# 정할 수 있다 -> 아래 _compose_and_preview() 안에서 topic_id가 정해진
+# 뒤에 db.list_mail_templates(sender_email, topic_id)로 그때 불러온다.
 
 
 def _on_new_topic():
@@ -757,10 +779,10 @@ def _on_new_topic():
     if not name:
         return
     try:
-        tid = db.create_topic(name, sender_email, "기본형")
+        tid = db.create_topic(name, sender_email)
         st.session_state["topic_id_sel"] = tid
-        st.session_state["new_topic_name"] = ""
-        apply_preset("기본형")
+        st.session_state["show_new_topic_form"] = False
+        clear_compose_fields()
         st.session_state["_last_topic_for_preset"] = tid
     except Exception as e:
         st.session_state["topic_error"] = str(e)
@@ -773,18 +795,19 @@ def _on_new_topic():
 
 def _on_template_change():
     sel = st.session_state.get("template_picker")
-    if not sel:
+    if not sel or sel == NO_TEMPLATE:
+        clear_compose_fields()
         return
-    if sel.startswith("★ "):
+    tid = st.session_state.get("topic_id_sel")
+    if sel.startswith("★ ") and tid is not None:
         try:
-            custom = db.get_mail_template(sender_email, sel[2:])
+            custom = db.get_mail_template(sender_email, tid, sel[2:])
             if custom:
                 apply_preset(sel, custom=custom)
         except Exception:
             pass
     elif sel in EMAIL_PRESETS:
         apply_preset(sel)
-    tid = st.session_state.get("topic_id_sel")
     if tid is not None:
         try:
             db.set_topic_preset(tid, sel if not sel.startswith("★ ") else sel[2:])
@@ -796,34 +819,63 @@ def _on_template_change():
 # 좌측 편집 | 우측 미리보기  (fragment: 옵션 변경 시 이 영역만 갱신)
 # ==========================================
 def _compose_and_preview():
-    # 모바일 폭에서는 두 칸이 위→아래로 쌓이는데, 원래 순서대로면 편집 화면을
-    # 전부 내려야 미리보기가 나왔다. 미리보기가 먼저(위쪽) 보이도록 이 두 칸에
-    # 담을 내용(아래의 with left / with right)은 그대로 두고 변수만 서로 바꿔 묶는다.
-    right, left = st.columns([1, 1], gap="large")
+    left, right = st.columns([1, 1], gap="large")
 
     with left:
+        # ---- 주제 선택 ----
         st.markdown('<div class="dash-card">', unsafe_allow_html=True)
-        t1, t2, t3 = st.columns([1.3, 1, 0.3])
+        t1, t2, t3 = st.columns([2.6, 0.5, 0.5])
         with t1:
             if topics:
                 topic_id = st.selectbox(
-                    "주제", options=list(topic_names.keys()),
-                    format_func=lambda i: topic_names[i], key="topic_id_sel",
-                    label_visibility="collapsed")
+                    "주제 선택", options=list(topic_names.keys()),
+                    format_func=lambda i: topic_names[i], key="topic_id_sel")
             else:
                 topic_id = None
-                st.caption("주제가 없습니다. 오른쪽에 입력하세요.")
+                st.caption("아직 주제가 없습니다. 오른쪽 + 버튼으로 만들어 주세요.")
         with t2:
-            st.text_input(
-                "새 주제", key="new_topic_name", placeholder="새 주제 입력 후 Enter",
-                on_change=_on_new_topic, label_visibility="collapsed")
+            st.markdown('<div style="height:1.6em;"></div>', unsafe_allow_html=True)
+            if st.button("＋", key="add_topic_btn", help="새 주제 만들기", use_container_width=True):
+                st.session_state["show_new_topic_form"] = not st.session_state.get("show_new_topic_form", False)
         with t3:
+            st.markdown('<div style="height:1.6em;"></div>', unsafe_allow_html=True)
             if topic_id is not None:
-                if st.button("🗑", key="del_topic_btn", help="이 주제 삭제",
-                             use_container_width=True):
-                    st.session_state["confirm_delete_topic"] = topic_id
-        if st.session_state.get("confirm_delete_topic") == topic_id and topic_id is not None:
-            st.warning(f"「{topic_names[topic_id]}」 주제와 발송 기록을 모두 삭제할까요? 되돌릴 수 없습니다.")
+                if st.button("🗑", key="del_topic_btn", help="이 주제 삭제", use_container_width=True):
+                    try:
+                        if db.topic_has_send_history(topic_id):
+                            st.session_state["topic_delete_blocked"] = topic_id
+                            st.session_state.pop("confirm_delete_topic", None)
+                        else:
+                            st.session_state["confirm_delete_topic"] = topic_id
+                            st.session_state.pop("topic_delete_blocked", None)
+                    except Exception as e:
+                        st.error(f"확인 실패: {e}")
+
+        if st.session_state.get("show_new_topic_form"):
+            n1, n2, n3 = st.columns([2.6, 0.5, 0.5])
+            with n1:
+                st.text_input("새 주제 이름", key="new_topic_name",
+                              placeholder="예: 2026 세제개편 세미나 초청",
+                              label_visibility="collapsed")
+            with n2:
+                # 주제 선택 selectbox가 이 버튼보다 먼저 그려지므로, 여기서
+                # 곧장 함수를 부르면(같은 실행 안에서) 그 selectbox의
+                # session_state를 더는 못 바꾼다 -> on_click 콜백으로 등록해
+                # 다음 실행이 시작되기 전(위젯이 그려지기 전)에 처리되게 한다.
+                st.button("확인", key="confirm_new_topic", use_container_width=True,
+                         on_click=_on_new_topic)
+            with n3:
+                if st.button("취소", key="cancel_new_topic", use_container_width=True):
+                    st.session_state["show_new_topic_form"] = False
+                    st.rerun()
+
+        if st.session_state.get("topic_delete_blocked") == topic_id and topic_id is not None:
+            st.error("이미 발송 기록이 있는 주제는 삭제할 수 없습니다. 발송 내역은 그대로 보존됩니다.")
+            if st.button("확인", key="ack_topic_delete_blocked"):
+                st.session_state.pop("topic_delete_blocked", None)
+                st.rerun()
+        elif st.session_state.get("confirm_delete_topic") == topic_id and topic_id is not None:
+            st.warning(f"「{topic_names[topic_id]}」 주제와 그 안의 템플릿을 삭제할까요? 되돌릴 수 없습니다.")
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("삭제", key="confirm_del_topic", type="primary", use_container_width=True):
@@ -832,6 +884,10 @@ def _compose_and_preview():
                         st.session_state.pop("confirm_delete_topic", None)
                         st.session_state.pop("topic_id_sel", None)
                         st.session_state.pop("_last_topic_for_preset", None)
+                        st.rerun()
+                    except ValueError as e:
+                        st.session_state.pop("confirm_delete_topic", None)
+                        st.session_state["topic_delete_blocked"] = topic_id
                         st.rerun()
                     except Exception as e:
                         st.error(f"삭제 실패: {e}")
@@ -843,67 +899,72 @@ def _compose_and_preview():
             st.error(st.session_state.pop("topic_error"))
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # 주제 변경 시 연결된 템플릿 적용 (rerun 없이 아래에서 바로 반영)
+        # 이 주제에 연결된 기본 템플릿을 이 주제로 처음 들어왔을 때 한 번 적용
         if topic_id is not None:
             linked = topic_presets.get(topic_id)
             last_applied = st.session_state.get("_last_topic_for_preset")
-            if linked and last_applied != topic_id:
+            if last_applied != topic_id:
                 if linked in EMAIL_PRESETS:
                     apply_preset(linked)
-                elif linked in user_tmpl_names:
-                    apply_preset(f"★ {linked}", custom=db.get_mail_template(sender_email, linked))
+                elif linked:
+                    custom = db.get_mail_template(sender_email, topic_id, linked)
+                    if custom:
+                        apply_preset(f"★ {linked}", custom=custom)
+                    else:
+                        clear_compose_fields()
+                else:
+                    clear_compose_fields()
                 st.session_state["_last_topic_for_preset"] = topic_id
+
+        # ---- 템플릿 선택 (주제별로 따로 저장됨) ----
+        if topic_id is not None:
+            try:
+                user_tmpls = db.list_mail_templates(sender_email, topic_id)
+            except Exception:
+                user_tmpls = []
+        else:
+            user_tmpls = []
+        user_tmpl_names = [t["name"] for t in user_tmpls]
+        all_tmpl_opts = [NO_TEMPLATE] + list(EMAIL_PRESETS.keys()) + [f"★ {n}" for n in user_tmpl_names]
 
         st.markdown('<div class="dash-card">', unsafe_allow_html=True)
 
-        cur = st.session_state.get("active_preset", "기본형")
+        cur = st.session_state.get("active_preset", NO_TEMPLATE)
         if cur not in all_tmpl_opts:
-            cur = "기본형"
+            cur = NO_TEMPLATE
         is_user_tmpl = cur.startswith("★ ")
         # selectbox는 key가 한 번 쓰이고 나면 index= 인자를 매번 무시하고 이전
         # 선택값을 그대로 유지하므로, 템플릿 저장/삭제 등으로 active_preset이
         # 바뀐 경우 위젯 값을 직접 맞춰줘야 드롭다운에도 바로 반영된다.
         st.session_state["template_picker"] = cur
-        c_tmpl, c_save, c_del = st.columns([2.6, 0.9, 0.4])
+        c_tmpl, c_add, c_del = st.columns([2.6, 0.5, 0.5])
         with c_tmpl:
             st.selectbox(
-                "템플릿", all_tmpl_opts,
-                key="template_picker", on_change=_on_template_change,
-                label_visibility="collapsed")
-        with c_save:
-            if st.button("저장", use_container_width=True, help="현재 내용을 템플릿으로 저장"):
-                st.session_state["show_save_tmpl_form"] = True
+                "템플릿 선택", all_tmpl_opts,
+                key="template_picker", on_change=_on_template_change)
+        with c_add:
+            st.markdown('<div style="height:1.6em;"></div>', unsafe_allow_html=True)
+            if st.button("＋", key="add_tmpl_btn", help="현재 내용을 새 템플릿으로 저장",
+                         use_container_width=True, disabled=topic_id is None):
+                st.session_state["show_new_tmpl_form"] = not st.session_state.get("show_new_tmpl_form", False)
         with c_del:
+            st.markdown('<div style="height:1.6em;"></div>', unsafe_allow_html=True)
             if is_user_tmpl:
                 if st.button("🗑", key="del_tmpl_btn", help="이 템플릿 삭제",
                              use_container_width=True):
                     st.session_state["confirm_delete_tmpl"] = cur
 
-        if st.session_state.get("confirm_delete_tmpl") == cur and is_user_tmpl:
-            st.warning(f"「{cur[2:]}」 템플릿을 삭제할까요? 되돌릴 수 없습니다.")
-            d1, d2 = st.columns(2)
-            with d1:
-                if st.button("삭제", key="confirm_del_tmpl", type="primary", use_container_width=True):
-                    try:
-                        db.delete_mail_template(sender_email, cur[2:])
-                        st.session_state.pop("confirm_delete_tmpl", None)
-                        st.session_state["active_preset"] = "기본형"
-                        apply_preset("기본형")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"삭제 실패: {e}")
-            with d2:
-                if st.button("취소", key="cancel_del_tmpl", use_container_width=True):
-                    st.session_state.pop("confirm_delete_tmpl", None)
-                    st.rerun()
-
-        if st.session_state.get("show_save_tmpl_form"):
-            with st.form("save_tmpl_form", clear_on_submit=False):
-                tname = st.text_input("템플릿 이름", placeholder="예: 세미나 초청")
-                if st.form_submit_button("확인"):
-                    if tname.strip():
+        if st.session_state.get("show_new_tmpl_form") and topic_id is not None:
+            m1, m2, m3 = st.columns([2.6, 0.5, 0.5])
+            with m1:
+                st.text_input("새 템플릿 이름", key="new_tmpl_name",
+                              placeholder="예: 세미나 초청", label_visibility="collapsed")
+            with m2:
+                if st.button("확인", key="confirm_new_tmpl", use_container_width=True):
+                    tname = (st.session_state.get("new_tmpl_name") or "").strip()
+                    if tname:
                         try:
-                            db.save_mail_template(sender_email, tname.strip(), {
+                            db.save_mail_template(sender_email, topic_id, tname, {
                                 "subject": st.session_state.get("email_subject_template"),
                                 "body_mode": st.session_state.get("body_mode", "html"),
                                 "plain_body": st.session_state.get("email_body_template"),
@@ -912,190 +973,202 @@ def _compose_and_preview():
                                 "image_width_pct": st.session_state.get("image_width_pct", 80),
                                 "image_align": st.session_state.get("image_align", "가운데"),
                             })
-                            st.session_state["active_preset"] = f"★ {tname.strip()}"
-                            st.session_state["show_save_tmpl_form"] = False
+                            st.session_state["active_preset"] = f"★ {tname}"
+                            st.session_state["show_new_tmpl_form"] = False
                             st.rerun()
                         except Exception as e:
                             st.error(f"저장 실패: {e}")
                     else:
                         st.warning("이름을 입력하세요.")
+            with m3:
+                if st.button("취소", key="cancel_new_tmpl", use_container_width=True):
+                    st.session_state["show_new_tmpl_form"] = False
+                    st.rerun()
 
-        s1, s2 = st.columns([4, 1.2])
-        with s1:
-            email_subject_template = st.text_input(
-                "제목", key="email_subject_template", label_visibility="collapsed",
-                placeholder="메일 제목")
-        with s2:
-            render_var_insert("email_subject_template", "var_subj")
-
-        tab_body, tab_footer, tab_form = st.tabs(["본문", "푸터", "설문지"])
-
-        with tab_body:
-            body_mode = st.radio(
-                "형식", list(BODY_MODE_LABELS.keys()),
-                format_func=lambda k: BODY_MODE_LABELS[k],
-                horizontal=True, key="body_mode", label_visibility="collapsed")
-            use_plain_text_body = body_mode in ("text", "both")
-            use_html_body = body_mode in ("html", "both")
-            email_body_template = st.session_state.get("email_body_template", "")
-            email_html_template = st.session_state.get("email_html_template", "")
-
-            if use_plain_text_body:
-                v1, v2 = st.columns([5, 1.3])
-                with v2:
-                    render_var_insert("email_body_template", "var_body_txt")
-                with v1:
-                    st.caption("텍스트 본문")
-                email_body_template = st.text_area(
-                    "텍스트 본문", key="email_body_template", height=160, label_visibility="collapsed")
-            if use_html_body:
-                v1, v2 = st.columns([5, 1.3])
-                with v2:
-                    render_var_insert("email_html_template", "var_body_html")
-                with v1:
-                    st.caption("HTML 본문")
-                email_html_template = st.text_area(
-                    "HTML 본문", key="email_html_template", height=160, label_visibility="collapsed")
-
-            st.toggle("본문 이미지", key="use_body_image")
-            use_body_image = st.session_state.get("use_body_image", False)
-            image_insert_mode = st.session_state.get("image_insert_mode", "본문 하단 첨부")
-            image_width_pct = st.session_state.get("image_width_pct", 80)
-            image_align = st.session_state.get("image_align", "가운데")
-            uploaded_body_image = None
-            body_image_bytes = None
-
-            if use_body_image:
-                uploaded_body_image = st.file_uploader(
-                    "이미지 파일", type=["png", "jpg", "jpeg"], key="body_img_uploader")
-                if uploaded_body_image:
-                    body_image_bytes = uploaded_body_image.getvalue()
-                    if use_html_body and st.session_state.get("_last_body_img_hash") != hashlib.md5(body_image_bytes).hexdigest():
-                        mime = uploaded_body_image.type or "image/png"
-                        b64 = base64.b64encode(body_image_bytes).decode("utf-8")
-                        img_tag = (
-                            f'<img src="data:{mime};base64,{b64}" '
-                            f'style="max-width:{st.session_state.get("image_width_pct", 80)}%;'
-                            f'height:auto;display:block;margin:18px auto;" />'
-                        )
-                        html_cur = st.session_state.get("email_html_template") or ""
-                        if "{이미지}" in html_cur:
-                            st.session_state["email_html_template"] = html_cur.replace("{이미지}", img_tag)
-                        else:
-                            st.session_state["email_html_template"] = html_cur + "\n" + img_tag
-                        st.session_state["_last_body_img_hash"] = hashlib.md5(body_image_bytes).hexdigest()
-                        st.session_state["use_body_image"] = False
-                        st.rerun()
-                ic1, ic2, ic3 = st.columns(3)
-                with ic1:
-                    image_insert_mode = st.selectbox(
-                        "삽입", ["본문 하단 첨부", "본문 중간 삽입 (마커: {이미지})"],
-                        key="image_insert_mode")
-                with ic2:
-                    image_width_pct = st.slider("너비%", 20, 100, step=5, key="image_width_pct")
-                with ic3:
-                    image_align = st.selectbox("정렬", ["가운데", "왼쪽", "오른쪽"], key="image_align")
-
-        with tab_footer:
-            footer_mode = st.radio(
-                "푸터", list(FOOTER_MODE_LABELS.keys()),
-                format_func=lambda k: FOOTER_MODE_LABELS[k],
-                horizontal=True, key="footer_mode", label_visibility="collapsed")
-            footer_text_template = ""
-            footer_html_template = ""
-            use_footer_image = False
-            uploaded_footer_image = None
-            footer_image_bytes = None
-            footer_image_width_pct = st.session_state.get("footer_image_width_pct", 60)
-            footer_image_align = st.session_state.get("footer_image_align", "가운데")
-
-            if footer_mode == "text":
-                fv1, fv2 = st.columns([5, 1.3])
-                with fv2:
-                    render_var_insert("footer_text_template", "var_footer")
-                with fv1:
-                    st.caption("푸터 텍스트")
-                footer_text_template = st.text_area(
-                    "푸터 텍스트", key="footer_text_template", height=90, label_visibility="collapsed")
-                st.session_state["use_footer_image"] = False
-            elif footer_mode == "image":
-                st.session_state["use_footer_image"] = True
-                use_footer_image = True
-                if st.session_state.get("saved_footer_image_b64") and not st.session_state.get("_footer_upload_override"):
+        if st.session_state.get("confirm_delete_tmpl") == cur and is_user_tmpl and topic_id is not None:
+            st.warning(f"「{cur[2:]}」 템플릿을 삭제할까요? 되돌릴 수 없습니다.")
+            d1, d2 = st.columns(2)
+            with d1:
+                if st.button("삭제", key="confirm_del_tmpl", type="primary", use_container_width=True):
                     try:
-                        footer_image_bytes = base64.b64decode(st.session_state["saved_footer_image_b64"])
-                        st.caption(f"기본 이미지: {st.session_state.get('saved_footer_image_name', '')}")
-                    except Exception:
-                        footer_image_bytes = None
-                uploaded_footer_image = st.file_uploader(
-                    "푸터 이미지", type=["png", "jpg", "jpeg"], key="footer_img_uploader")
-                if uploaded_footer_image:
-                    footer_image_bytes = uploaded_footer_image.getvalue()
-                    st.session_state["_footer_bytes_for_save"] = footer_image_bytes
-                    st.session_state["_footer_name_for_save"] = uploaded_footer_image.name
-                    st.session_state["_footer_upload_override"] = True
-                fc1, fc2 = st.columns(2)
-                with fc1:
-                    footer_image_width_pct = st.slider(
-                        "너비%", 20, 100, step=5, key="footer_image_width_pct")
-                with fc2:
-                    footer_image_align = st.selectbox(
-                        "정렬", ["가운데", "왼쪽", "오른쪽"], key="footer_image_align")
-                footer_text_template = st.text_area(
-                    "이미지 아래 문구", key="footer_text_template", height=70,
-                    placeholder="선택 사항")
-            else:
-                st.session_state["use_footer_image"] = False
-                st.caption("푸터 없음")
+                        db.delete_mail_template(sender_email, topic_id, cur[2:])
+                        st.session_state.pop("confirm_delete_tmpl", None)
+                        clear_compose_fields()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"삭제 실패: {e}")
+            with d2:
+                if st.button("취소", key="cancel_del_tmpl", use_container_width=True):
+                    st.session_state.pop("confirm_delete_tmpl", None)
+                    st.rerun()
 
-        with tab_form:
-            form_mode = st.radio(
-                "설문", ["사용 안 함", "기존 링크", "새 폼 생성(API)"],
-                horizontal=True, key="form_mode_radio", label_visibility="collapsed")
-            if form_mode == "기존 링크":
-                form_url_input = st.text_input(
-                    "Forms 링크", key="google_form_input",
-                    placeholder="https://docs.google.com/forms/...")
-                if form_url_input:
-                    st.session_state["google_form_url"] = form_url_input.strip()
-                st.session_state["include_google_form"] = bool(form_url_input)
-            elif form_mode == "새 폼 생성(API)":
-                uploaded_cred = st.file_uploader("서비스 계정 JSON", type=["json"], key="forms_cred")
-                form_title = st.text_input("설문 제목", value="참석 신청서")
-                form_description = st.text_area("설명", value="간단한 사전 문항입니다.", height=60)
-                if st.button("설문지 생성"):
-                    if not uploaded_cred:
-                        st.error("JSON을 업로드하세요.")
-                    else:
+        with st.container(height=560, border=False):
+            s1, s2 = st.columns([4, 1.2])
+            with s1:
+                email_subject_template = st.text_input(
+                    "제목", key="email_subject_template", label_visibility="collapsed",
+                    placeholder=EXAMPLE_SUBJECT)
+            with s2:
+                render_var_insert("email_subject_template", "var_subj")
+
+            tab_body, tab_footer, tab_form = st.tabs(["본문", "푸터", "설문지"])
+
+            with tab_body:
+                body_mode = st.radio(
+                    "형식", list(BODY_MODE_LABELS.keys()),
+                    format_func=lambda k: BODY_MODE_LABELS[k],
+                    horizontal=True, key="body_mode", label_visibility="collapsed")
+                use_plain_text_body = body_mode in ("text", "both")
+                use_html_body = body_mode in ("html", "both")
+                email_body_template = st.session_state.get("email_body_template", "")
+                email_html_template = st.session_state.get("email_html_template", "")
+
+                if use_plain_text_body:
+                    v1, v2 = st.columns([5, 1.3])
+                    with v2:
+                        render_var_insert("email_body_template", "var_body_txt")
+                    with v1:
+                        st.caption("텍스트 본문")
+                    email_body_template = st.text_area(
+                        "텍스트 본문", key="email_body_template", height=160, label_visibility="collapsed",
+                        placeholder=EXAMPLE_PLAIN_BODY)
+                if use_html_body:
+                    v1, v2 = st.columns([5, 1.3])
+                    with v2:
+                        render_var_insert("email_html_template", "var_body_html")
+                    with v1:
+                        st.caption("HTML 본문")
+                    email_html_template = st.text_area(
+                        "HTML 본문", key="email_html_template", height=160, label_visibility="collapsed",
+                        placeholder=EXAMPLE_HTML_BODY)
+
+                st.toggle("본문 이미지", key="use_body_image")
+                use_body_image = st.session_state.get("use_body_image", False)
+                image_insert_mode = st.session_state.get("image_insert_mode", "본문 하단 첨부")
+                image_width_pct = st.session_state.get("image_width_pct", 80)
+                image_align = st.session_state.get("image_align", "가운데")
+                uploaded_body_image = None
+                body_image_bytes = None
+
+                if use_body_image:
+                    # 이미지는 오른쪽 미리보기에서 바로 보이므로, 여기서는 파일만
+                    # 받고 화면에 다시 보여주지 않는다. 실제 위치(본문 중간의
+                    # {이미지} 자리 또는 본문 하단)는 발송/미리보기를 만들 때 정해진다.
+                    uploaded_body_image = st.file_uploader(
+                        "이미지 파일", type=["png", "jpg", "jpeg"], key="body_img_uploader")
+                    if uploaded_body_image:
+                        body_image_bytes = uploaded_body_image.getvalue()
+                    ic1, ic2, ic3 = st.columns(3)
+                    with ic1:
+                        image_insert_mode = st.selectbox(
+                            "삽입", ["본문 하단 첨부", "본문 중간 삽입 (마커: {이미지})"],
+                            key="image_insert_mode")
+                    with ic2:
+                        image_width_pct = st.slider("너비%", 20, 100, step=5, key="image_width_pct")
+                    with ic3:
+                        image_align = st.selectbox("정렬", ["가운데", "왼쪽", "오른쪽"], key="image_align")
+
+            with tab_footer:
+                footer_mode = st.radio(
+                    "푸터", list(FOOTER_MODE_LABELS.keys()),
+                    format_func=lambda k: FOOTER_MODE_LABELS[k],
+                    horizontal=True, key="footer_mode", label_visibility="collapsed")
+                footer_text_template = ""
+                footer_html_template = ""
+                use_footer_image = False
+                uploaded_footer_image = None
+                footer_image_bytes = None
+                footer_image_width_pct = st.session_state.get("footer_image_width_pct", 60)
+                footer_image_align = st.session_state.get("footer_image_align", "가운데")
+
+                if footer_mode == "text":
+                    fv1, fv2 = st.columns([5, 1.3])
+                    with fv2:
+                        render_var_insert("footer_text_template", "var_footer")
+                    with fv1:
+                        st.caption("푸터 텍스트")
+                    footer_text_template = st.text_area(
+                        "푸터 텍스트", key="footer_text_template", height=90, label_visibility="collapsed",
+                        placeholder=EXAMPLE_FOOTER_TEXT)
+                    st.session_state["use_footer_image"] = False
+                elif footer_mode == "image":
+                    st.session_state["use_footer_image"] = True
+                    use_footer_image = True
+                    if st.session_state.get("saved_footer_image_b64") and not st.session_state.get("_footer_upload_override"):
                         try:
-                            from google.oauth2 import service_account
-                            from googleapiclient.discovery import build
-                            cred_json = json.loads(uploaded_cred.getvalue().decode("utf-8"))
-                            scopes = ["https://www.googleapis.com/auth/forms.body",
-                                      "https://www.googleapis.com/auth/drive"]
-                            creds = service_account.Credentials.from_service_account_info(
-                                cred_json, scopes=scopes)
-                            service = build("forms", "v1", credentials=creds)
-                            create_body = {"info": {"title": form_title, "documentTitle": form_title,
-                                                    "description": form_description}}
-                            form = service.forms().create(body=create_body).execute()
-                            form_name = form.get("name") or ""
-                            form_id = form_name.split("/")[-1] if "/" in form_name else form.get("formId") or ""
-                            form_url = (f"https://docs.google.com/forms/d/e/{form_id}/viewform"
-                                        if form_id else (form.get("responderUri") or ""))
-                            if form_url:
-                                st.session_state["google_form_url"] = form_url
-                                st.session_state["include_google_form"] = True
-                                st.success("생성 완료")
-                                st.write(form_url)
-                            else:
-                                st.error("링크를 확인하지 못했습니다.")
-                        except ImportError:
-                            st.error("google-api-python-client, google-auth 설치 필요")
-                        except Exception as e:
-                            st.error(str(e))
-            else:
-                st.session_state["include_google_form"] = False
+                            footer_image_bytes = base64.b64decode(st.session_state["saved_footer_image_b64"])
+                            st.caption(f"기본 이미지: {st.session_state.get('saved_footer_image_name', '')}")
+                        except Exception:
+                            footer_image_bytes = None
+                    uploaded_footer_image = st.file_uploader(
+                        "푸터 이미지", type=["png", "jpg", "jpeg"], key="footer_img_uploader")
+                    if uploaded_footer_image:
+                        footer_image_bytes = uploaded_footer_image.getvalue()
+                        st.session_state["_footer_bytes_for_save"] = footer_image_bytes
+                        st.session_state["_footer_name_for_save"] = uploaded_footer_image.name
+                        st.session_state["_footer_upload_override"] = True
+                    fc1, fc2 = st.columns(2)
+                    with fc1:
+                        footer_image_width_pct = st.slider(
+                            "너비%", 20, 100, step=5, key="footer_image_width_pct")
+                    with fc2:
+                        footer_image_align = st.selectbox(
+                            "정렬", ["가운데", "왼쪽", "오른쪽"], key="footer_image_align")
+                    footer_text_template = st.text_area(
+                        "이미지 아래 문구", key="footer_text_template", height=70,
+                        placeholder="선택 사항")
+                else:
+                    st.session_state["use_footer_image"] = False
+                    st.caption("푸터 없음")
+
+            with tab_form:
+                form_mode = st.radio(
+                    "설문", ["사용 안 함", "기존 링크", "새 폼 생성(API)"],
+                    horizontal=True, key="form_mode_radio", label_visibility="collapsed")
+                if form_mode == "기존 링크":
+                    form_url_input = st.text_input(
+                        "Forms 링크", key="google_form_input",
+                        placeholder="https://docs.google.com/forms/...")
+                    if form_url_input:
+                        st.session_state["google_form_url"] = form_url_input.strip()
+                    st.session_state["include_google_form"] = bool(form_url_input)
+                elif form_mode == "새 폼 생성(API)":
+                    uploaded_cred = st.file_uploader("서비스 계정 JSON", type=["json"], key="forms_cred")
+                    form_title = st.text_input("설문 제목", value="참석 신청서")
+                    form_description = st.text_area("설명", value="간단한 사전 문항입니다.", height=60)
+                    if st.button("설문지 생성"):
+                        if not uploaded_cred:
+                            st.error("JSON을 업로드하세요.")
+                        else:
+                            try:
+                                from google.oauth2 import service_account
+                                from googleapiclient.discovery import build
+                                cred_json = json.loads(uploaded_cred.getvalue().decode("utf-8"))
+                                scopes = ["https://www.googleapis.com/auth/forms.body",
+                                          "https://www.googleapis.com/auth/drive"]
+                                creds = service_account.Credentials.from_service_account_info(
+                                    cred_json, scopes=scopes)
+                                service = build("forms", "v1", credentials=creds)
+                                create_body = {"info": {"title": form_title, "documentTitle": form_title,
+                                                        "description": form_description}}
+                                form = service.forms().create(body=create_body).execute()
+                                form_name = form.get("name") or ""
+                                form_id = form_name.split("/")[-1] if "/" in form_name else form.get("formId") or ""
+                                form_url = (f"https://docs.google.com/forms/d/e/{form_id}/viewform"
+                                            if form_id else (form.get("responderUri") or ""))
+                                if form_url:
+                                    st.session_state["google_form_url"] = form_url
+                                    st.session_state["include_google_form"] = True
+                                    st.success("생성 완료")
+                                    st.write(form_url)
+                                else:
+                                    st.error("링크를 확인하지 못했습니다.")
+                            except ImportError:
+                                st.error("google-api-python-client, google-auth 설치 필요")
+                            except Exception as e:
+                                st.error(str(e))
+                else:
+                    st.session_state["include_google_form"] = False
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1103,44 +1176,33 @@ def _compose_and_preview():
     with right:
         st.markdown('<div class="dash-card-title" style="margin-bottom:6px;">실시간 미리보기</div>',
                     unsafe_allow_html=True)
-        preview_src = "샘플 데이터"
-        row_data = SAMPLE_ROW
-        preview_opts = ["샘플 데이터"]
-        if st.session_state.get("valid_df_cache") is not None:
-            vdf = st.session_state["valid_df_cache"]
-            if vdf is not None and not getattr(vdf, "empty", True):
-                preview_opts += [f"{r['회사명']} ({r['이메일']})" for _, r in vdf.iterrows()]
-        pick = st.selectbox("미리보기 대상", preview_opts, key="compose_preview_pick",
-                            label_visibility="collapsed")
-        if pick != "샘플 데이터" and st.session_state.get("valid_df_cache") is not None:
-            vdf = st.session_state["valid_df_cache"]
-            preview_src = pick
-            for _, r in vdf.iterrows():
-                if f"{r['회사명']} ({r['이메일']})" == pick:
-                    row_data = r
-                    break
+        st.caption("아직 아무것도 입력하지 않은 항목은 회색 예시로 보여줍니다. 입력하면 바로 반영됩니다.")
+
+        # 제목/본문/푸터를 입력하지 않았으면 placeholder와 같은 예시로 대신 채워서
+        # 보여준다 (실제 저장/발송 내용은 그대로 빈 값 - 아래 _compose에 원본을 담음).
+        preview_subject_src = email_subject_template.strip() or EXAMPLE_SUBJECT
+        preview_plain_src = (email_body_template.strip() or EXAMPLE_PLAIN_BODY) if use_plain_text_body else ""
+        preview_html_src = (email_html_template.strip() or EXAMPLE_HTML_BODY) if use_html_body else ""
+        preview_footer_src = footer_text_template.strip() or EXAMPLE_FOOTER_TEXT if footer_mode == "text" else footer_text_template
 
         b64_body_img = base64.b64encode(body_image_bytes).decode("utf-8") if body_image_bytes else None
         b64_footer_img = base64.b64encode(footer_image_bytes).decode("utf-8") if footer_image_bytes else None
         preview_subj, preview_html = build_email_html(
-            row_data, email_subject_template,
-            email_body_template if use_plain_text_body else "",
-            sender_name,
-            html_tmpl=email_html_template if use_html_body else "",
+            SAMPLE_ROW, preview_subject_src, preview_plain_src, sender_name,
+            html_tmpl=preview_html_src,
             use_plain_text=use_plain_text_body, use_html_body=use_html_body,
             has_body_image=bool(body_image_bytes), has_footer_image=bool(footer_image_bytes),
             is_preview=True, body_img_base64=b64_body_img, footer_img_base64=b64_footer_img,
             image_insert_mode=image_insert_mode, image_width_pct=image_width_pct, image_align=image_align,
-            footer_text_tmpl=footer_text_template, footer_html_tmpl=footer_html_template,
+            footer_text_tmpl=preview_footer_src, footer_html_tmpl=footer_html_template,
             footer_image_width_pct=footer_image_width_pct, footer_image_align=footer_image_align,
         )
         st.markdown(
-            f'<div class="preview-meta"><b>제목</b> {preview_subj}<br/>'
-            f'<b>대상</b> {preview_src}</div>',
+            f'<div class="preview-meta"><b>제목</b> {preview_subj}</div>',
             unsafe_allow_html=True,
         )
         st.markdown('<div class="preview-shell">', unsafe_allow_html=True)
-        st.components.v1.html(preview_html, height=620, scrolling=True)
+        st.components.v1.html(preview_html, height=560, scrolling=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     # 발송 구간에서 쓰도록 상태 저장
@@ -1198,166 +1260,167 @@ st.markdown(
     '<div class="dash-card-title" style="margin-bottom:8px;">수신 대상 · 현황 · 발송</div>',
     unsafe_allow_html=True,
 )
-uploaded_file = st.file_uploader("거래처 엑셀 (.xlsx)", type=["xlsx"], label_visibility="collapsed")
-st.caption("엑셀 파일을 업로드하세요 (필수 열: 회사명, 대표자명, 이메일)")
+with st.container(height=560, border=False):
+    uploaded_file = st.file_uploader("거래처 엑셀 (.xlsx)", type=["xlsx"], label_visibility="collapsed")
+    st.caption("엑셀 파일을 업로드하세요 (필수 열: 회사명, 대표자명, 이메일)")
 
-tab_list, tab_dash, tab_hist = st.tabs(["발송 명단", "주제별 현황", "발송 내역"])
+    tab_list, tab_dash, tab_hist = st.tabs(["발송 명단", "주제별 현황", "발송 내역"])
 
-view_df = None
-edited_df = None
-valid_df = None
+    view_df = None
+    edited_df = None
+    valid_df = None
 
-with tab_list:
-    if not uploaded_file:
-        st.info("엑셀 파일을 업로드하면 주제별 발송 여부가 함께 표시됩니다.")
-    elif topic_id is None:
-        st.warning("먼저 위에서 발송 주제를 선택하거나 만들어 주세요.")
-    else:
-        df = pd.read_excel(uploaded_file)
-        missing_cols = [c for c in ("회사명", "대표자명", "이메일") if c not in df.columns]
-        if missing_cols:
-            st.error(f"엑셀에 필수 열이 없습니다: {', '.join(missing_cols)}")
-            st.stop()
-        for c in ("산업분류", "AI_판정"):
-            if c not in df.columns:
-                df[c] = ""
-        df = df.fillna("")
-        df["이메일"] = df["이메일"].astype(str).str.strip().str.lower()
-
-        mask_valid = df["이메일"].apply(lambda x: bool(EMAIL_RE.match(x)))
-        valid_all = df[mask_valid]
-        valid_df = valid_all.drop_duplicates(subset="이메일").reset_index(drop=True)
-        dup_count = len(valid_all) - len(valid_df)
-        invalid_count = len(df) - len(valid_all)
-
-        st.success(f"총 {len(df)}개 중 **발송 가능: {len(valid_df)}건** "
-                   f"(이메일 없음/형식 오류 {invalid_count}건, 엑셀 내 중복 {dup_count}건 자동 제외)")
-
-        # 엑셀 → recipients 반영 (파일이 바뀔 때만)
-        file_hash = hashlib.md5(uploaded_file.getvalue()).hexdigest()
-        if st.session_state.get("synced_hash") != file_hash:
-            try:
-                with st.spinner("수신자 정보를 DB에 반영하는 중..."):
-                    st.session_state["recipient_ids"] = db.upsert_recipients(valid_df)
-                st.session_state["synced_hash"] = file_hash
-            except Exception as e:
-                st.error(f"DB 반영 중 오류가 발생했습니다: {e}")
+    with tab_list:
+        if not uploaded_file:
+            st.info("엑셀 파일을 업로드하면 주제별 발송 여부가 함께 표시됩니다.")
+        elif topic_id is None:
+            st.warning("먼저 위에서 발송 주제를 선택하거나 만들어 주세요.")
+        else:
+            df = pd.read_excel(uploaded_file)
+            missing_cols = [c for c in ("회사명", "대표자명", "이메일") if c not in df.columns]
+            if missing_cols:
+                st.error(f"엑셀에 필수 열이 없습니다: {', '.join(missing_cols)}")
                 st.stop()
-        id_map = st.session_state["recipient_ids"]
+            for c in ("산업분류", "AI_판정"):
+                if c not in df.columns:
+                    df[c] = ""
+            df = df.fillna("")
+            df["이메일"] = df["이메일"].astype(str).str.strip().str.lower()
 
+            mask_valid = df["이메일"].apply(lambda x: bool(EMAIL_RE.match(x)))
+            valid_all = df[mask_valid]
+            valid_df = valid_all.drop_duplicates(subset="이메일").reset_index(drop=True)
+            dup_count = len(valid_all) - len(valid_df)
+            invalid_count = len(df) - len(valid_all)
+
+            st.success(f"총 {len(df)}개 중 **발송 가능: {len(valid_df)}건** "
+                       f"(이메일 없음/형식 오류 {invalid_count}건, 엑셀 내 중복 {dup_count}건 자동 제외)")
+
+            # 엑셀 → recipients 반영 (파일이 바뀔 때만)
+            file_hash = hashlib.md5(uploaded_file.getvalue()).hexdigest()
+            if st.session_state.get("synced_hash") != file_hash:
+                try:
+                    with st.spinner("수신자 정보를 DB에 반영하는 중..."):
+                        st.session_state["recipient_ids"] = db.upsert_recipients(valid_df)
+                    st.session_state["synced_hash"] = file_hash
+                except Exception as e:
+                    st.error(f"DB 반영 중 오류가 발생했습니다: {e}")
+                    st.stop()
+            id_map = st.session_state["recipient_ids"]
+
+            try:
+                logs = db.topic_status(topic_id)
+            except Exception as e:
+                st.error(f"발송 기록을 불러오지 못했습니다: {e}")
+                st.stop()
+
+            valid_df["recipient_id"] = valid_df["이메일"].map(id_map)
+            coded = valid_df["recipient_id"].map(lambda rid: status_of(logs.get(rid)))
+            valid_df["_code"] = coded.map(lambda x: x[0])
+            valid_df["상태"] = coded.map(lambda x: x[1])
+            valid_df["발송선택"] = valid_df["_code"].isin(["none", "failed"])
+
+            counts = valid_df["_code"].value_counts()
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("미발송", int(counts.get("none", 0)))
+            c2.metric("발송완료", int(counts.get("sent", 0)))
+            c3.metric("발송중", int(counts.get("pending", 0)))
+            c4.metric("실패", int(counts.get("failed", 0)))
+
+            flt = st.radio("보기", ["전체", "미발송", "발송완료", "실패/발송중"], horizontal=True)
+            if flt == "미발송":
+                view_df = valid_df[valid_df["_code"] == "none"]
+            elif flt == "발송완료":
+                view_df = valid_df[valid_df["_code"] == "sent"]
+            elif flt == "실패/발송중":
+                view_df = valid_df[valid_df["_code"].isin(["failed", "pending"])]
+            else:
+                view_df = valid_df
+
+            st.caption("기본으로 미발송·실패 건만 체크됩니다. 이미 발송된 건은 체크해도 발송 시 자동으로 건너뜁니다.")
+            cols = ["발송선택", "상태", "회사명", "대표자명", "이메일", "산업분류", "AI_판정"]
+            edited_df = st.data_editor(
+                view_df[cols],
+                disabled=[c for c in cols if c != "발송선택"],
+                hide_index=True,
+                use_container_width=True,
+            )
+            st.session_state["valid_df_cache"] = valid_df
+
+    with tab_dash:
         try:
-            logs = db.topic_status(topic_id)
+            total_rcp = db.count_recipients()
+            log_rows = db.all_log_lite()
+            today_by_sender = db.sent_today_by_sender()
         except Exception as e:
-            st.error(f"발송 기록을 불러오지 못했습니다: {e}")
-            st.stop()
+            st.error(f"현황을 불러오지 못했습니다: {e}")
+            log_rows, total_rcp, today_by_sender = [], 0, {}
 
-        valid_df["recipient_id"] = valid_df["이메일"].map(id_map)
-        coded = valid_df["recipient_id"].map(lambda rid: status_of(logs.get(rid)))
-        valid_df["_code"] = coded.map(lambda x: x[0])
-        valid_df["상태"] = coded.map(lambda x: x[1])
-        valid_df["발송선택"] = valid_df["_code"].isin(["none", "failed"])
+        st.metric("DB에 등록된 전체 수신자", total_rcp)
 
-        counts = valid_df["_code"].value_counts()
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("미발송", int(counts.get("none", 0)))
-        c2.metric("발송완료", int(counts.get("sent", 0)))
-        c3.metric("발송중", int(counts.get("pending", 0)))
-        c4.metric("실패", int(counts.get("failed", 0)))
-
-        flt = st.radio("보기", ["전체", "미발송", "발송완료", "실패/발송중"], horizontal=True)
-        if flt == "미발송":
-            view_df = valid_df[valid_df["_code"] == "none"]
-        elif flt == "발송완료":
-            view_df = valid_df[valid_df["_code"] == "sent"]
-        elif flt == "실패/발송중":
-            view_df = valid_df[valid_df["_code"].isin(["failed", "pending"])]
+        if not topics:
+            st.info("아직 주제가 없습니다.")
         else:
-            view_df = valid_df
+            ldf = pd.DataFrame(log_rows, columns=["id", "topic_id", "status", "sender_email"])
+            pivot = (ldf.pivot_table(index="topic_id", columns="status", values="id", aggfunc="count", fill_value=0)
+                     if not ldf.empty else pd.DataFrame())
+            for c in ("sent", "pending", "failed"):
+                if c not in pivot.columns:
+                    pivot[c] = 0
+            pivot = pivot.reindex([t["id"] for t in topics], fill_value=0)
+            pivot["미발송"] = (total_rcp - pivot[["sent", "pending", "failed"]].sum(axis=1)).clip(lower=0)
+            summary = pivot[["sent", "pending", "failed", "미발송"]].astype(int)
+            summary.columns = ["발송완료", "발송중", "실패", "미발송"]
+            summary.index = [topic_names[i] for i in summary.index]
+            summary.index.name = "주제"
+            st.markdown("**주제별 발송 현황** (미발송 = 전체 수신자 − 기록된 건수)")
+            st.dataframe(summary, use_container_width=True)
 
-        st.caption("기본으로 미발송·실패 건만 체크됩니다. 이미 발송된 건은 체크해도 발송 시 자동으로 건너뜁니다.")
-        cols = ["발송선택", "상태", "회사명", "대표자명", "이메일", "산업분류", "AI_판정"]
-        edited_df = st.data_editor(
-            view_df[cols],
-            disabled=[c for c in cols if c != "발송선택"],
-            hide_index=True,
-            use_container_width=True,
-        )
-        st.session_state["valid_df_cache"] = valid_df
+            if topic_id is not None and not ldf.empty:
+                cur = ldf[ldf["topic_id"] == topic_id]
+                if not cur.empty:
+                    st.markdown(f"**「{topic_names[topic_id]}」 발신 계정별 현황**")
+                    by_sender = cur.pivot_table(index="sender_email", columns="status", values="id",
+                                                aggfunc="count", fill_value=0)
+                    st.dataframe(by_sender, use_container_width=True)
 
-with tab_dash:
-    try:
-        total_rcp = db.count_recipients()
-        log_rows = db.all_log_lite()
-        today_by_sender = db.sent_today_by_sender()
-    except Exception as e:
-        st.error(f"현황을 불러오지 못했습니다: {e}")
-        log_rows, total_rcp, today_by_sender = [], 0, {}
+        if today_by_sender:
+            st.markdown("**오늘 발신 계정별 발송량**")
+            st.dataframe(pd.DataFrame({"오늘 발송": pd.Series(today_by_sender)}), use_container_width=True)
 
-    st.metric("DB에 등록된 전체 수신자", total_rcp)
-
-    if not topics:
-        st.info("아직 주제가 없습니다.")
-    else:
-        ldf = pd.DataFrame(log_rows, columns=["id", "topic_id", "status", "sender_email"])
-        pivot = (ldf.pivot_table(index="topic_id", columns="status", values="id", aggfunc="count", fill_value=0)
-                 if not ldf.empty else pd.DataFrame())
-        for c in ("sent", "pending", "failed"):
-            if c not in pivot.columns:
-                pivot[c] = 0
-        pivot = pivot.reindex([t["id"] for t in topics], fill_value=0)
-        pivot["미발송"] = (total_rcp - pivot[["sent", "pending", "failed"]].sum(axis=1)).clip(lower=0)
-        summary = pivot[["sent", "pending", "failed", "미발송"]].astype(int)
-        summary.columns = ["발송완료", "발송중", "실패", "미발송"]
-        summary.index = [topic_names[i] for i in summary.index]
-        summary.index.name = "주제"
-        st.markdown("**주제별 발송 현황** (미발송 = 전체 수신자 − 기록된 건수)")
-        st.dataframe(summary, use_container_width=True)
-
-        if topic_id is not None and not ldf.empty:
-            cur = ldf[ldf["topic_id"] == topic_id]
-            if not cur.empty:
-                st.markdown(f"**「{topic_names[topic_id]}」 발신 계정별 현황**")
-                by_sender = cur.pivot_table(index="sender_email", columns="status", values="id",
-                                            aggfunc="count", fill_value=0)
-                st.dataframe(by_sender, use_container_width=True)
-
-    if today_by_sender:
-        st.markdown("**오늘 발신 계정별 발송량**")
-        st.dataframe(pd.DataFrame({"오늘 발송": pd.Series(today_by_sender)}), use_container_width=True)
-
-with tab_hist:
-    if topic_id is None:
-        st.info("주제를 선택해 주세요.")
-    else:
-        scope = st.radio("보기", ["내 발송", "전체"], horizontal=True, key="hist_scope")
-        try:
-            details = db.log_detail(topic_id, sender_email if scope == "내 발송" else None)
-        except Exception as e:
-            details = []
-            st.error(f"발송 내역을 불러오지 못했습니다: {e}")
-        if not details:
-            st.info("발송 내역이 없습니다.")
+    with tab_hist:
+        if topic_id is None:
+            st.info("주제를 선택해 주세요.")
         else:
-            table = pd.DataFrame([{
-                "시각": fmt_kst(d.get("sent_at") or d.get("claimed_at")),
-                "발신자": d.get("sender_name") or d.get("sender_email"),
-                "수신 회사": (d.get("recipients") or {}).get("company"),
-                "수신 이메일": (d.get("recipients") or {}).get("email"),
-                "상태": d.get("status"),
-                "제목": d.get("subject"),
-                "오류": d.get("error"),
-            } for d in details])
-            st.dataframe(table, hide_index=True, use_container_width=True)
+            scope = st.radio("보기", ["내 발송", "전체"], horizontal=True, key="hist_scope")
+            try:
+                details = db.log_detail(topic_id, sender_email if scope == "내 발송" else None)
+            except Exception as e:
+                details = []
+                st.error(f"발송 내역을 불러오지 못했습니다: {e}")
+            if not details:
+                st.info("발송 내역이 없습니다.")
+            else:
+                table = pd.DataFrame([{
+                    "시각": fmt_kst(d.get("sent_at") or d.get("claimed_at")),
+                    "발신자": d.get("sender_name") or d.get("sender_email"),
+                    "수신 회사": (d.get("recipients") or {}).get("company"),
+                    "수신 이메일": (d.get("recipients") or {}).get("email"),
+                    "상태": d.get("status"),
+                    "제목": d.get("subject"),
+                    "오류": d.get("error"),
+                } for d in details])
+                st.dataframe(table, hide_index=True, use_container_width=True)
 
-            sent_rows = [d for d in details if d.get("status") == "sent"]
-            if sent_rows:
-                sel = st.selectbox(
-                    "발송된 본문 보기", options=[d["id"] for d in sent_rows],
-                    format_func=lambda i: next(
-                        f"{(d.get('recipients') or {}).get('company')} · {fmt_kst(d.get('sent_at'))}"
-                        for d in sent_rows if d["id"] == i))
-                if st.button("본문 불러오기"):
-                    st.components.v1.html(db.get_body(sel), height=500, scrolling=True)
+                sent_rows = [d for d in details if d.get("status") == "sent"]
+                if sent_rows:
+                    sel = st.selectbox(
+                        "발송된 본문 보기", options=[d["id"] for d in sent_rows],
+                        format_func=lambda i: next(
+                            f"{(d.get('recipients') or {}).get('company')} · {fmt_kst(d.get('sent_at'))}"
+                            for d in sent_rows if d["id"] == i))
+                    if st.button("본문 불러오기"):
+                        st.components.v1.html(db.get_body(sel), height=500, scrolling=True)
 
 # ==========================================
 # 5. 발송 실행
@@ -1380,7 +1443,14 @@ if edited_df is not None and view_df is not None:
                 for line in last["errors"]:
                     st.write(line)
 
-    if st.button("확인 완료 및 이메일 일괄 발송 시작", type="primary"):
+    _no_subject = not email_subject_template.strip()
+    _no_body = ((use_plain_text_body and not email_body_template.strip()) or
+               (use_html_body and not email_html_template.strip()))
+    if _no_subject or _no_body:
+        st.info("미리보기는 예시로 채워져 보이지만, 실제로 보내려면 제목과 본문을 직접 입력해야 합니다.")
+
+    if st.button("확인 완료 및 이메일 일괄 발송 시작", type="primary",
+                 disabled=_no_subject or _no_body):
         if len(targets) == 0:
             st.warning("선택된 발송 대상이 없습니다.")
         else:
