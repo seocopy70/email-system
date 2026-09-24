@@ -11,6 +11,7 @@ import base64
 import os
 import re
 import smtplib
+import socket
 import time
 from email.header import Header
 from email.mime.image import MIMEImage
@@ -221,10 +222,34 @@ def _own(user: dict, email: Optional[str]) -> str:
 
 # ------------------------------------------------------------------ 유틸
 def smtp_connect(email: str, password: str):
-    server = smtplib.SMTP("smtp.gmail.com", 587, timeout=30)
-    server.starttls()
-    server.login(email, password.replace(" ", "").strip())
-    return server
+    infos = socket.getaddrinfo(
+        "smtp.gmail.com",
+        587,
+        socket.AF_INET,
+        socket.SOCK_STREAM,
+    )
+    last_error = None
+
+    for family, socktype, proto, canonname, sockaddr in infos:
+        try:
+            sock = socket.socket(family, socktype, proto)
+            sock.settimeout(30)
+            sock.connect(sockaddr)
+
+            server = smtplib.SMTP()
+            server.sock = sock
+            server.file = sock.makefile("rb")
+            server.starttls()
+            server.login(email, password.replace(" ", "").strip())
+            return server
+        except Exception as e:
+            last_error = e
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    raise last_error
 
 
 def decode_image(b64: Optional[str]) -> Optional[bytes]:
