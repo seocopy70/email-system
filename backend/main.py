@@ -61,7 +61,7 @@ class LoginBody(BaseModel):
 class TopicCreate(BaseModel):
     name: str
     created_by: Optional[str] = None  # 무시됨 (로그인한 계정으로 기록)
-    default_preset: Optional[str] = "기본형"
+    default_preset: Optional[str] = None  # 비우면 빈 "직접 작성" 상태로 시작
 
 
 class TemplateSave(BaseModel):
@@ -388,7 +388,8 @@ def create_topic(body: TopicCreate, user: dict = Depends(current_user)):
     name = body.name.strip()
     if not name or len(name) > 200:
         raise HTTPException(400, "주제 이름을 1~200자로 입력해 주세요")
-    tid = db.create_topic(name, user["email"], body.default_preset or "기본형")
+    # 새 주제는 기본 템플릿을 미리 연결하지 않고 빈 "직접 작성" 상태로 시작한다.
+    tid = db.create_topic(name, user["email"], body.default_preset or None)
     return {"id": tid}
 
 
@@ -421,6 +422,13 @@ def get_template(name: str, topic_id: int, owner_email: Optional[str] = None,
     if not t:
         raise HTTPException(404, "템플릿 없음")
     return t
+
+
+@app.delete("/api/templates/{name}")
+def delete_template(name: str, topic_id: int, owner_email: Optional[str] = None,
+                    user: dict = Depends(current_user)):
+    db.delete_mail_template(_own(user, owner_email), topic_id, name)
+    return {"ok": True}
 
 
 @app.delete("/api/topics/{topic_id}")
