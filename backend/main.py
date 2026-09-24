@@ -12,6 +12,7 @@ import os
 import re
 import smtplib
 import socket
+import ssl
 import time
 from email.header import Header
 from email.mime.image import MIMEImage
@@ -221,35 +222,43 @@ def _own(user: dict, email: Optional[str]) -> str:
 
 
 # ------------------------------------------------------------------ 유틸
-def smtp_connect(email: str, password: str):
-    infos = socket.getaddrinfo(
-        "smtp.gmail.com",
-        587,
-        socket.AF_INET,
-        socket.SOCK_STREAM,
-    )
-    last_error = None
+class _IPv4SMTP(smtplib.SMTP):
+    """IPv4로만 접속하는 SMTP 클라이언트.
 
-    for family, socktype, proto, canonname, sockaddr in infos:
-        try:
-            sock = socket.socket(family, socktype, proto)
-            sock.settimeout(30)
-            sock.connect(sockaddr)
+    일부 서버(Oracle Cloud 등)는 IPv6 경로가 없어 smtp.gmail.com의 IPv6 주소로
+    붙다가 실패합니다. 소켓만 IPv4로 만들고 나머지(첫 인사 응답 읽기, STARTTLS,
+    호스트명 검증)는 smtplib 기본 흐름을 그대로 탑니다.
+    """
 
-            server = smtplib.SMTP()
-            server.sock = sock
-            server.file = sock.makefile("rb")
-            server.starttls()
-            server.login(email, password.replace(" ", "").strip())
-            return server
-        except Exception as e:
-            last_error = e
+    def _get_socket(self, host, port, timeout):
+        last = None
+        for af, socktype, proto, _canon, sockaddr in socket.getaddrinfo(
+                host, port, socket.AF_INET, socket.SOCK_STREAM):
+            sock = socket.socket(af, socktype, proto)
             try:
+                sock.settimeout(timeout)
+                if self.source_address:
+                    sock.bind(self.source_address)
+                sock.connect(sockaddr)
+                return sock
+            except OSError as e:
+                last = e
                 sock.close()
-            except Exception:
-                pass
+        raise last or OSError(f"{host}의 IPv4 주소를 찾지 못했습니다")
 
-    raise last_error
+
+def smtp_connect(email: str, password: str):
+    server = _IPv4SMTP("smtp.gmail.com", 587, timeout=30)
+    try:
+        server.starttls(context=ssl.create_default_context())
+        server.login(email, password.replace(" ", "").strip())
+    except Exception:
+        try:
+            server.close()
+        except Exception:
+            pass
+        raise
+    return server
 
 
 def decode_image(b64: Optional[str]) -> Optional[bytes]:
