@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { api, AuthUser, fileToBase64, setAuthToken, setUnauthorizedHandler } from "@/lib/api";
 
@@ -15,6 +15,32 @@ const SAMPLE = {
   AI_판정: "A",
   이메일: "sample@example.com",
 };
+
+// 템플릿 드롭다운의 첫 항목: 아무 템플릿도 적용하지 않고 직접 쓰는 상태
+const NO_TMPL = "직접 작성";
+
+const PlusIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+const TrashIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" />
+  </svg>
+);
+
+// 아직 안 보냈거나 실패한 수신자만 기본 선택
+function pickSelectable(items: any[], st: Record<string, any>): Set<string> {
+  return new Set(
+    items
+      .filter((r) => {
+        const log = st[String(r.recipient_id)];
+        return !log || log.status === "failed";
+      })
+      .map((r) => String(r.recipient_id))
+  );
+}
 
 export default function Home() {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -57,6 +83,12 @@ export default function Home() {
   const [sendResult, setSendResult] = useState("");
   const [saveTmplName, setSaveTmplName] = useState("");
   const [showSave, setShowSave] = useState(false);
+  const [activeTmpl, setActiveTmpl] = useState(NO_TMPL);
+  const [showNewTopic, setShowNewTopic] = useState(false);
+  const [confirmDelTopic, setConfirmDelTopic] = useState(false);
+  const [confirmDelTmpl, setConfirmDelTmpl] = useState(false);
+  const [topicMsg, setTopicMsg] = useState("");
+  const lastEnteredTopic = useRef<number | null>(null);
 
   const [bottomTab, setBottomTab] = useState<BottomTab>("list");
   const [stats, setStats] = useState<any>(null);
@@ -68,12 +100,6 @@ export default function Home() {
     const m = await api.meta();
     setPresets(m.presets || {});
     setVarTags(m.var_tags || []);
-    const first = m.presets?.["기본형"];
-    if (first) {
-      setSubject(first.subject || "");
-      setPlainBody(first.plain_body || "");
-      setHtmlBody(first.html_body || "");
-    }
   }, []);
 
   const refreshTopics = useCallback(async () => {
@@ -99,7 +125,6 @@ export default function Home() {
   useEffect(() => {
     if (!user) return;
     refreshTopics().catch(console.error);
-    api.templates(user.email).then(setTemplates).catch(console.error);
     api
       .getPrefs(user.email)
       .then((p) => {
@@ -114,6 +139,9 @@ export default function Home() {
       .catch(() => {});
   }, [user, refreshTopics]);
 
+  // 입력칸이 비어 있으면 회색 예시(기본형)를 보여주고, 미리보기도 그 예시 기준으로 그린다
+  const ex = presets["기본형"] || {};
+
   // 미리보기 대상 row
   const previewRow =
     previewPick === "샘플"
@@ -125,9 +153,9 @@ export default function Home() {
     const t = setTimeout(() => {
       api
         .preview({
-          subject,
-          plain_body: plainBody,
-          html_body: htmlBody,
+          subject: subject || ex.subject || "",
+          plain_body: plainBody || ex.plain_body || "",
+          html_body: htmlBody || ex.html_body || "",
           sender_name: user.name,
           body_mode: bodyMode,
           footer_mode: footerMode,
@@ -152,6 +180,7 @@ export default function Home() {
     subject,
     plainBody,
     htmlBody,
+    presets,
     bodyMode,
     footerMode,
     footerText,
@@ -196,6 +225,7 @@ export default function Home() {
   }
 
   function logout() {
+    lastEnteredTopic.current = null;
     setUser(null);
     setPassword("");
     setAuthToken(null);
@@ -208,16 +238,62 @@ export default function Home() {
     setPlainBody(p.plain_body || "");
     setHtmlBody(p.html_body || "");
     setBodyMode((p.body_mode as BodyMode) || "html");
+    setActiveTmpl(name);
   }
 
-  async function applyUserTemplate(name: string) {
-    if (!user) return;
-    const t = await api.getTemplate(user.email, name);
+  // 아무 템플릿도 고르지 않은 '직접 작성' 상태로 되돌린다 (빈 칸 + 회색 예시)
+  function clearCompose() {
+    setSubject("");
+    setPlainBody("");
+    setHtmlBody("");
+    setActiveTmpl(NO_TMPL);
+  }
+
+  async function applyUserTemplate(name: string, tid: number | null = topicId) {
+    if (!user || tid == null) return;
+    const t = await api.getTemplate(user.email, tid, name);
     setSubject(t.subject || "");
     setPlainBody(t.plain_body || "");
     setHtmlBody(t.html_body || "");
     setBodyMode((t.body_mode as BodyMode) || "html");
+    setActiveTmpl(`★ ${name}`);
   }
+
+  // 주제에 들어가면: 그 주제의 템플릿 목록을 불러오고, 연결된 기본 템플릿이 있으면 적용, 없으면 빈 상태로
+  async function enterTopic(tid: number) {
+    if (!user) return;
+    setConfirmDelTopic(false);
+    setConfirmDelTmpl(false);
+    setShowSave(false);
+    setTopicMsg("");
+    const list = await api.templates(user.email, tid);
+    setTemplates(list);
+    const linked: string | null = topics.find((t) => t.id === tid)?.default_preset || null;
+    if (linked && presets[linked]) applyPreset(linked);
+    else if (linked && list.some((x: any) => x.name === linked)) await applyUserTemplate(linked, tid);
+    else clearCompose();
+  }
+
+  useEffect(() => {
+    if (!user || topicId == null || !topics.length || !Object.keys(presets).length) return;
+    if (lastEnteredTopic.current === topicId) return;
+    lastEnteredTopic.current = topicId;
+    enterTopic(topicId).catch(console.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, topicId, topics, presets]);
+
+  // 주제를 바꾸면 이미 불러온 명단의 발송 여부를 그 주제 기준으로 다시 표시한다
+  useEffect(() => {
+    if (!user || topicId == null || !recipients.length) return;
+    api
+      .topicStatus(topicId)
+      .then((st) => {
+        setStatusMap(st);
+        setSelected(pickSelectable(recipients, st));
+      })
+      .catch(console.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, topicId]);
 
   function insertTag(field: "subject" | "plain" | "html" | "footer", tag: string) {
     if (field === "subject") setSubject((s) => s + tag);
@@ -259,26 +335,88 @@ export default function Home() {
 
   async function addTopic() {
     if (!user || !newTopic.trim()) return;
-    const { id } = await api.createTopic(newTopic.trim(), user.email);
-    setNewTopic("");
-    await refreshTopics();
-    setTopicId(id);
-    applyPreset("기본형");
+    setTopicMsg("");
+    try {
+      const { id } = await api.createTopic(newTopic.trim(), user.email);
+      setNewTopic("");
+      setShowNewTopic(false);
+      const t = await api.topics();
+      setTopics(t);
+      setTopicId(id); // 주제로 들어가는 처리는 위 effect가 한 번만 한다
+    } catch (e: any) {
+      setTopicMsg(e.message || "주제를 만들지 못했습니다");
+    }
+  }
+
+  // 발송 기록이 하나라도 있는 주제는 지우지 않는다 (서버도 한 번 더 막는다)
+  async function requestDeleteTopic() {
+    if (topicId == null) return;
+    setTopicMsg("");
+    try {
+      const st = await api.topicStatus(topicId);
+      if (Object.keys(st || {}).length > 0) {
+        setConfirmDelTopic(false);
+        setTopicMsg("이미 발송 기록이 있는 주제는 삭제할 수 없습니다. 발송 내역은 그대로 보존됩니다.");
+        return;
+      }
+      setConfirmDelTopic(true);
+    } catch (e: any) {
+      setTopicMsg(e.message || "확인하지 못했습니다");
+    }
+  }
+
+  async function doDeleteTopic() {
+    if (topicId == null) return;
+    try {
+      await api.deleteTopic(topicId);
+      setConfirmDelTopic(false);
+      const t = await api.topics();
+      setTopics(t);
+      lastEnteredTopic.current = null;
+      setTopicId(t.length ? t[0].id : null);
+      if (!t.length) {
+        setTemplates([]);
+        clearCompose();
+      }
+    } catch (e: any) {
+      setConfirmDelTopic(false);
+      setTopicMsg(e.message || "삭제하지 못했습니다");
+    }
   }
 
   async function saveTemplate() {
-    if (!user || !saveTmplName.trim()) return;
-    await api.saveTemplate({
-      owner_email: user.email,
-      name: saveTmplName.trim(),
-      subject,
-      body_mode: bodyMode,
-      plain_body: plainBody,
-      html_body: htmlBody,
-    });
-    setShowSave(false);
-    setSaveTmplName("");
-    setTemplates(await api.templates(user.email));
+    if (!user || topicId == null || !saveTmplName.trim()) return;
+    const name = saveTmplName.trim();
+    try {
+      await api.saveTemplate({
+        owner_email: user.email,
+        topic_id: topicId,
+        name,
+        subject,
+        body_mode: bodyMode,
+        plain_body: plainBody,
+        html_body: htmlBody,
+      });
+      setShowSave(false);
+      setSaveTmplName("");
+      setTemplates(await api.templates(user.email, topicId));
+      setActiveTmpl(`★ ${name}`);
+    } catch (e: any) {
+      alert(e.message || "저장하지 못했습니다");
+    }
+  }
+
+  async function doDeleteTemplate() {
+    if (!user || topicId == null || !activeTmpl.startsWith("★ ")) return;
+    try {
+      await api.deleteTemplate(user.email, topicId, activeTmpl.slice(2));
+      setConfirmDelTmpl(false);
+      setTemplates(await api.templates(user.email, topicId));
+      clearCompose();
+    } catch (e: any) {
+      setConfirmDelTmpl(false);
+      alert(e.message || "삭제하지 못했습니다");
+    }
   }
 
   async function onExcel(file: File) {
@@ -304,15 +442,7 @@ export default function Home() {
     setRecipients(withIds);
     const st = await api.topicStatus(topicId);
     setStatusMap(st);
-    const selectable = new Set(
-      withIds
-        .filter((r) => {
-          const log = st[String(r.recipient_id)] || st[r.recipient_id];
-          return !log || log.status === "failed";
-        })
-        .map((r) => String(r.recipient_id))
-    );
-    setSelected(selectable);
+    setSelected(pickSelectable(withIds, st));
     setBottomTab("list");
   }
 
@@ -335,6 +465,13 @@ export default function Home() {
       }));
     if (!targets.length) {
       alert("발송 대상이 없습니다");
+      return;
+    }
+    // 눌렀을 때 바로 확인: 제목/본문이 비어 있으면 보내지 않는다
+    const needText = bodyMode === "text" || bodyMode === "both";
+    const needHtml = bodyMode === "html" || bodyMode === "both";
+    if (!subject.trim() || (needText && !plainBody.trim()) || (needHtml && !htmlBody.trim())) {
+      alert("제목과 본문을 입력해 주세요.");
       return;
     }
     setBusy(true);
@@ -433,24 +570,87 @@ export default function Home() {
 
       <main className="max-w-[1400px] mx-auto p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
         <section className="space-y-3">
-          <div className="card p-4">
+          <div className="card p-4 space-y-2">
             <div className="card-title">발송 주제</div>
             <div className="flex gap-2">
-              <select className="input" value={topicId ?? ""} onChange={(e) => setTopicId(Number(e.target.value))}>
+              <select
+                className="input"
+                aria-label="발송 주제"
+                value={topicId ?? ""}
+                onChange={(e) => setTopicId(Number(e.target.value))}
+              >
+                {topics.length === 0 && <option value="">아직 주제가 없습니다. 오른쪽 + 버튼으로 만들어 주세요.</option>}
                 {topics.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
                   </option>
                 ))}
               </select>
-              <input
-                className="input"
-                placeholder="새 주제 Enter"
-                value={newTopic}
-                onChange={(e) => setNewTopic(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addTopic()}
-              />
+              <button
+                type="button"
+                className="btn-ghost !px-2.5"
+                title="새 주제 만들기"
+                aria-label="새 주제 만들기"
+                onClick={() => {
+                  setShowNewTopic((v) => !v);
+                  setTopicMsg("");
+                }}
+              >
+                <PlusIcon />
+              </button>
+              {topicId != null && (
+                <button
+                  type="button"
+                  className="btn-ghost !px-2.5"
+                  title="이 주제 삭제"
+                  aria-label="이 주제 삭제"
+                  onClick={requestDeleteTopic}
+                >
+                  <TrashIcon />
+                </button>
+              )}
             </div>
+            {showNewTopic && (
+              <div className="flex gap-2">
+                <input
+                  className="input"
+                  aria-label="새 주제 이름"
+                  placeholder="예: 2026 세제개편 세미나 초청"
+                  value={newTopic}
+                  onChange={(e) => setNewTopic(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addTopic()}
+                />
+                <button type="button" className="btn-primary whitespace-nowrap" onClick={addTopic}>
+                  확인
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost whitespace-nowrap"
+                  onClick={() => {
+                    setShowNewTopic(false);
+                    setNewTopic("");
+                  }}
+                >
+                  취소
+                </button>
+              </div>
+            )}
+            {confirmDelTopic && (
+              <div className="flex flex-wrap items-center gap-2 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <span className="flex-1">「{topics.find((t) => t.id === topicId)?.name}」 주제를 삭제할까요? 이 주제의 템플릿도 함께 지워집니다.</span>
+                <button type="button" className="btn-primary" onClick={doDeleteTopic}>
+                  삭제
+                </button>
+                <button type="button" className="btn-ghost" onClick={() => setConfirmDelTopic(false)}>
+                  취소
+                </button>
+              </div>
+            )}
+            {topicMsg && (
+              <div role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                {topicMsg}
+              </div>
+            )}
           </div>
 
           <div className="card p-4 space-y-3">
@@ -463,13 +663,18 @@ export default function Home() {
             <div className="flex gap-2">
               <select
                 className="input"
-                defaultValue="기본형"
+                aria-label="템플릿 선택"
+                value={activeTmpl}
+                disabled={topicId == null}
                 onChange={(e) => {
                   const v = e.target.value;
-                  if (v.startsWith("★ ")) applyUserTemplate(v.slice(2));
+                  setConfirmDelTmpl(false);
+                  if (v === NO_TMPL) clearCompose();
+                  else if (v.startsWith("★ ")) applyUserTemplate(v.slice(2)).catch(console.error);
                   else applyPreset(v);
                 }}
               >
+                <option value={NO_TMPL}>{NO_TMPL}</option>
                 {presetNames.map((n) => (
                   <option key={n} value={n}>
                     {n}
@@ -481,20 +686,72 @@ export default function Home() {
                   </option>
                 ))}
               </select>
-              <button className="btn-ghost whitespace-nowrap" onClick={() => setShowSave(true)}>
-                저장
+              <button
+                type="button"
+                className="btn-ghost !px-2.5"
+                title="현재 내용을 새 템플릿으로 저장"
+                aria-label="새 템플릿으로 저장"
+                disabled={topicId == null}
+                onClick={() => {
+                  setShowSave((v) => !v);
+                  setConfirmDelTmpl(false);
+                }}
+              >
+                <PlusIcon />
               </button>
+              {activeTmpl.startsWith("★ ") && (
+                <button
+                  type="button"
+                  className="btn-ghost !px-2.5"
+                  title="이 템플릿 삭제"
+                  aria-label="이 템플릿 삭제"
+                  onClick={() => {
+                    setConfirmDelTmpl(true);
+                    setShowSave(false);
+                  }}
+                >
+                  <TrashIcon />
+                </button>
+              )}
             </div>
             {showSave && (
               <div className="flex gap-2">
-                <input className="input" placeholder="템플릿 이름" value={saveTmplName} onChange={(e) => setSaveTmplName(e.target.value)} />
-                <button className="btn-primary" onClick={saveTemplate}>
+                <input
+                  className="input"
+                  aria-label="새 템플릿 이름"
+                  placeholder="템플릿 이름"
+                  value={saveTmplName}
+                  onChange={(e) => setSaveTmplName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && saveTemplate()}
+                />
+                <button type="button" className="btn-primary whitespace-nowrap" onClick={saveTemplate}>
                   확인
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost whitespace-nowrap"
+                  onClick={() => {
+                    setShowSave(false);
+                    setSaveTmplName("");
+                  }}
+                >
+                  취소
+                </button>
+              </div>
+            )}
+            {confirmDelTmpl && activeTmpl.startsWith("★ ") && (
+              <div className="flex flex-wrap items-center gap-2 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <span className="flex-1">「{activeTmpl.slice(2)}」 템플릿을 삭제할까요? 되돌릴 수 없습니다.</span>
+                <button type="button" className="btn-primary" onClick={doDeleteTemplate}>
+                  삭제
+                </button>
+                <button type="button" className="btn-ghost" onClick={() => setConfirmDelTmpl(false)}>
+                  취소
                 </button>
               </div>
             )}
 
-            <input className="input" placeholder="제목" value={subject} onChange={(e) => setSubject(e.target.value)} />
+            <input className="input" aria-label="제목" placeholder={ex.subject || "제목"} value={subject} onChange={(e) => setSubject(e.target.value)} />
             <div className="flex flex-wrap gap-1.5">
               {varTags.map((v) => (
                 <button key={v.tag} type="button" className="chip" onClick={() => insertTag("subject", v.tag)}>
@@ -539,7 +796,7 @@ export default function Home() {
                         </button>
                       ))}
                     </div>
-                    <textarea className="input min-h-[120px] font-mono text-xs" value={plainBody} onChange={(e) => setPlainBody(e.target.value)} />
+                    <textarea className="input min-h-[120px] font-mono text-xs" aria-label="텍스트 본문" placeholder={ex.plain_body} value={plainBody} onChange={(e) => setPlainBody(e.target.value)} />
                   </>
                 )}
                 {(bodyMode === "html" || bodyMode === "both") && (
@@ -551,7 +808,7 @@ export default function Home() {
                         </button>
                       ))}
                     </div>
-                    <textarea className="input min-h-[140px] font-mono text-xs" value={htmlBody} onChange={(e) => setHtmlBody(e.target.value)} />
+                    <textarea className="input min-h-[140px] font-mono text-xs" aria-label="HTML 본문" placeholder={ex.html_body} value={htmlBody} onChange={(e) => setHtmlBody(e.target.value)} />
                   </>
                 )}
                 <label className="flex items-center gap-2 text-sm">

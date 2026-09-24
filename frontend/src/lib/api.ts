@@ -64,14 +64,21 @@ export const api = {
   createTopic: (name: string, created_by: string) =>
     req<{ id: number }>("/api/topics", {
       method: "POST",
-      body: JSON.stringify({ name, created_by, default_preset: "기본형" }),
+      body: JSON.stringify({ name, created_by }),
     }),
   setTopicPreset: (id: number, preset: string) =>
     req(`/api/topics/${id}/preset?preset=${encodeURIComponent(preset)}`, { method: "PATCH" }),
-  templates: (owner: string) => req<any[]>(`/api/templates?owner_email=${encodeURIComponent(owner)}`),
+  // 템플릿은 주제별로 따로 저장되므로 항상 topic_id가 필요합니다.
+  templates: (owner: string, topicId: number) =>
+    req<any[]>(`/api/templates?topic_id=${topicId}&owner_email=${encodeURIComponent(owner)}`),
   saveTemplate: (body: any) => req("/api/templates", { method: "POST", body: JSON.stringify(body) }),
-  getTemplate: (owner: string, name: string) =>
-    req<any>(`/api/templates/${encodeURIComponent(name)}?owner_email=${encodeURIComponent(owner)}`),
+  getTemplate: (owner: string, topicId: number, name: string) =>
+    req<any>(`/api/templates/${encodeURIComponent(name)}?topic_id=${topicId}&owner_email=${encodeURIComponent(owner)}`),
+  deleteTemplate: (owner: string, topicId: number, name: string) =>
+    req(`/api/templates/${encodeURIComponent(name)}?topic_id=${topicId}&owner_email=${encodeURIComponent(owner)}`, {
+      method: "DELETE",
+    }),
+  deleteTopic: (id: number) => req(`/api/topics/${id}`, { method: "DELETE" }),
   preview: (body: any) =>
     req<{ subject: string; html: string }>("/api/preview", { method: "POST", body: JSON.stringify(body) }),
   upsertRecipients: (items: any[]) =>
