@@ -441,6 +441,25 @@ def build_image_tag(is_preview=False, img_base64=None, width_pct=80, align="가�
     return f'<img src="{img_src}" style="{style}">'
 
 
+def build_plain_text(row, body_tmpl, footer_text_tmpl, sender_nm):
+    """multipart/alternative의 text/plain 파트용 순수 텍스트 본문"""
+    def _fill(t):
+        t = str(t or "").replace("{구글설문버튼}", "{구글설문링크}")
+        t = t.replace("{이미지}", "").replace("{푸터이미지}", "")
+        return replace_email_placeholders(t, row, sender_nm).replace("\r\n", "\n").strip()
+
+    parts = [_fill(body_tmpl)]
+    form_url = ""
+    if st.session_state.get("include_google_form"):
+        form_url = st.session_state.get("google_form_url", "") or ""
+    if form_url and form_url not in parts[0]:
+        parts.append(f"설문 링크: {form_url}")
+    footer = _fill(footer_text_tmpl)
+    if footer:
+        parts.append(footer)
+    return "\n\n".join(x for x in parts if x)
+
+
 def build_email_html(row, subject_tmpl, body_tmpl, sender_nm, html_tmpl="", use_plain_text=True, use_html_body=False,
                      has_body_image=False, has_footer_image=False, is_preview=False,
                      body_img_base64=None, footer_img_base64=None,
@@ -458,7 +477,7 @@ def build_email_html(row, subject_tmpl, body_tmpl, sender_nm, html_tmpl="", use_
         footer_html_tmpl = (footer_html_tmpl or "").replace("{푸터이미지}", "")
 
     body_sections = []
-    if use_plain_text and body_tmpl:
+    if use_plain_text and body_tmpl and not (use_html_body and html_tmpl):
         plain_body = replace_email_placeholders(body_tmpl, row, sender_nm)
         if has_body_image and marker_mode:
             plain_body = plain_body.replace("{이미지}", build_image_tag(is_preview=is_preview, img_base64=body_img_base64, width_pct=image_width_pct, align=image_align, image_cid="body_image"))
@@ -823,6 +842,12 @@ def _compose_and_preview():
                 else:
                     topic_id = None
                     st.caption("아직 주제가 없습니다. 오른쪽 + 버튼으로 만들어 주세요.")
+                # 이 영역은 fragment라 주제만 바꿔도 아래 명단/현황은 예전 주제 기준으로 남는다.
+                # 주제가 바뀌면 앱 전체를 다시 실행해 명단·상태·발송 대상을 함께 갱신한다.
+                _prev_topic = st.session_state.get("_topic_seen")
+                st.session_state["_topic_seen"] = topic_id
+                if _prev_topic is not None and _prev_topic != topic_id:
+                    st.rerun(scope="app")
             with t2:
                 st.markdown('<div style="height:1.6em;"></div>', unsafe_allow_html=True)
                 if st.button(":material/add:", key="add_topic_btn", help="새 주제 만들기", use_container_width=True):
@@ -1143,8 +1168,8 @@ def _compose_and_preview():
                                     form = service.forms().create(body=create_body).execute()
                                     form_name = form.get("name") or ""
                                     form_id = form_name.split("/")[-1] if "/" in form_name else form.get("formId") or ""
-                                    form_url = (f"https://docs.google.com/forms/d/e/{form_id}/viewform"
-                                                if form_id else (form.get("responderUri") or ""))
+                                    form_url = (form.get("responderUri")
+                                                or (f"https://docs.google.com/forms/d/{form_id}/viewform" if form_id else ""))
                                     if form_url:
                                         st.session_state["google_form_url"] = form_url
                                         st.session_state["include_google_form"] = True
@@ -1436,10 +1461,25 @@ if edited_df is not None and view_df is not None:
     if _no_subject or _no_body:
         st.info("미리보기는 예시로 채워져 보이지만, 실제로 보내려면 제목과 본문을 직접 입력해야 합니다.")
 
-    if st.button("확인 완료 및 이메일 일괄 발송 시작", type="primary",
-                 disabled=_no_subject or _no_body):
-        if len(targets) == 0:
+    _pending_n = int(targets["_code"].isin(["none", "failed"]).sum())
+    try:
+        _today_sent = int(today_cnt)
+    except NameError:
+        _today_sent = 0
+    _over_limit = _today_sent + _pending_n > GMAIL_DAILY_LIMIT
+    _allow_over = False
+    if _over_limit:
+        st.warning(f"오늘 이 계정 발송 {_today_sent}건 + 이번 {_pending_n}건 = {_today_sent + _pending_n}건으로 "
+                   f"일일 한도({GMAIL_DAILY_LIMIT}건)를 넘습니다. Gmail이 중간에 발송을 막을 수 있습니다.")
+        _allow_over = st.checkbox("그래도 진행 (Google Workspace 등 한도가 더 큰 계정)", key="allow_over_limit")
+
+    if st.button("확인 완료 및 이메일 일괄 발송 시작", type="primary"):
+        if _no_subject or _no_body:
+            st.error("제목과 본문을 직접 입력해야 발송할 수 있습니다.")
+        elif len(targets) == 0:
             st.warning("선택된 발송 대상이 없습니다.")
+        elif _over_limit and not _allow_over:
+            st.error("일일 한도를 넘습니다. 대상을 줄이거나 위 체크박스로 진행을 허용해 주세요.")
         else:
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -1490,6 +1530,9 @@ if edited_df is not None and view_df is not None:
 
                     msg_alt = MIMEMultipart("alternative")
                     msg_root.attach(msg_alt)
+                    if use_plain_text_body and email_body_template.strip():
+                        plain_content = build_plain_text(r, email_body_template, footer_text_template, sender_name)
+                        msg_alt.attach(MIMEText(plain_content, "plain", "utf-8"))
                     msg_alt.attach(MIMEText(html_content, "html", "utf-8"))
 
                     if body_image_bytes:
