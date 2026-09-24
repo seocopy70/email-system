@@ -75,7 +75,6 @@ export default function Home() {
 
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewSubj, setPreviewSubj] = useState("");
-  const [previewPick, setPreviewPick] = useState("샘플");
 
   const [recipients, setRecipients] = useState<any[]>([]);
   const [statusMap, setStatusMap] = useState<Record<string, any>>({});
@@ -142,12 +141,6 @@ export default function Home() {
   // 입력칸이 비어 있으면 회색 예시(기본형)를 보여주고, 미리보기도 그 예시 기준으로 그린다
   const ex = presets["기본형"] || {};
 
-  // 미리보기 대상 row
-  const previewRow =
-    previewPick === "샘플"
-      ? SAMPLE
-      : recipients.find((r) => `${r.회사명} (${r.이메일})` === previewPick) || SAMPLE;
-
   useEffect(() => {
     if (!user) return;
     const t = setTimeout(() => {
@@ -166,7 +159,7 @@ export default function Home() {
           footer_image_b64: footerMode === "image" ? footerImageB64 : null,
           image_width_pct: imageWidth,
           footer_image_width_pct: footerImageWidth,
-          row: previewRow,
+          row: SAMPLE,
         })
         .then((r) => {
           setPreviewSubj(r.subject);
@@ -191,8 +184,6 @@ export default function Home() {
     useBodyImage,
     imageWidth,
     footerImageWidth,
-    previewPick,
-    recipients,
   ]);
 
   useEffect(() => {
@@ -544,24 +535,23 @@ export default function Home() {
 
   const presetNames = Object.keys(presets);
   const userTmplNames = templates.map((t) => t.name);
-  const previewOpts = ["샘플", ...recipients.map((r) => `${r.회사명} (${r.이메일})`)];
 
   return (
     <div className="min-h-screen pb-10">
-      <header className="bg-gradient-to-r from-ink-900 to-ink-700 text-white px-5 py-3.5">
+      <header className="bg-white border-b border-ink-200 shadow-sm px-5 py-3.5">
         <div className="max-w-[1400px] mx-auto flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-base font-semibold">기업 이메일 발송 시스템</h1>
-            <p className="text-xs text-white/70">맞춤 메일 · 중복 발송 방지 · 다중 계정</p>
+            <h1 className="text-base font-semibold text-ink-900">기업 이메일 발송 시스템</h1>
+            <p className="text-xs text-ink-500">맞춤 메일 · 중복 발송 방지 · 다중 계정</p>
           </div>
           <div className="flex items-center gap-4 text-sm">
             <div className="text-right">
               <div className="font-medium">{user.name}</div>
-              <div className="text-white/70 text-xs">
+              <div className="text-ink-500 text-xs">
                 {user.email} · 오늘 {user.sent_today}/{user.daily_limit}
               </div>
             </div>
-            <button className="btn-ghost !bg-white/10 !text-white hover:!bg-white/20" onClick={logout}>
+            <button className="btn-ghost" onClick={logout}>
               로그아웃
             </button>
           </div>
@@ -772,6 +762,7 @@ export default function Home() {
               ))}
             </div>
 
+            <div className="scroll-box h-[380px]">
             {activeTab === "body" && (
               <div className="space-y-2">
                 <div className="seg">
@@ -905,22 +896,16 @@ export default function Home() {
                 </label>
               </div>
             )}
+            </div>
           </div>
         </section>
 
-        <section className="card p-4 lg:sticky lg:top-4 h-fit space-y-2">
+        <section className="card p-4 lg:sticky lg:top-4 lg:self-start h-fit space-y-2">
           <div className="card-title">실시간 미리보기</div>
-          <select className="input text-sm" value={previewPick} onChange={(e) => setPreviewPick(e.target.value)}>
-            {previewOpts.map((o) => (
-              <option key={o} value={o}>
-                {o}
-              </option>
-            ))}
-          </select>
           <div className="text-xs text-ink-500 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2">
             <b>제목</b> {previewSubj || "—"}
           </div>
-          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden" style={{ height: 580 }}>
+          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden h-[70vh] min-h-[420px] max-h-[720px]">
             <iframe
               title="preview"
               className="w-full h-full bg-white"
@@ -955,7 +940,7 @@ export default function Home() {
               <input type="file" accept=".xlsx,.xls" onChange={(e) => e.target.files?.[0] && onExcel(e.target.files[0])} />
               {recipients.length > 0 && (
                 <>
-                  <div className="overflow-auto max-h-64 border border-ink-200 rounded-lg">
+                  <div className="scroll-box h-64">
                     <table className="w-full text-sm">
                       <thead className="bg-ink-50 sticky top-0">
                         <tr>

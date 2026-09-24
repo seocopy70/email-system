@@ -7,11 +7,16 @@
 }
 
 body {
-  @apply bg-ink-50 text-ink-900 antialiased;
+  @apply bg-ink-100 text-ink-900 antialiased;
 }
 
 .card {
-  @apply bg-white border border-ink-200 rounded-xl shadow-sm;
+  @apply bg-white border border-ink-200 rounded-2xl shadow-[0_1px_3px_rgba(15,23,42,0.06)];
+}
+
+/* 고정 높이 스크롤 박스: 내용이 길어도 카드 크기는 그대로, 안에서만 스크롤 */
+.scroll-box {
+  @apply overflow-y-auto overflow-x-hidden border border-ink-200 rounded-xl bg-ink-50/40 p-3;
 }
 
 .card-title {
