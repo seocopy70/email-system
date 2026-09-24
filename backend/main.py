@@ -31,6 +31,7 @@ from mail_builder import (
     EMAIL_PRESETS,
     VAR_TAGS,
     build_email_html,
+    build_plain_text,
     extract_data_uri_images,
     sniff_image_subtype,
 )
@@ -142,6 +143,7 @@ class SendBody(BaseModel):
     body_image_b64: Optional[str] = None
     footer_image_b64: Optional[str] = None
     delay_sec: float = 3
+    allow_over_limit: bool = False  # Gmail 일일 한도(500건) 초과를 알고도 진행
     targets: list[SendItem] = Field(max_length=2000)
 
 
@@ -289,13 +291,16 @@ def _clean_name(name: str) -> str:
 
 
 def build_mime(sender_name: str, sender_email: str, to_addr: str, subject: str,
-               html: str, images: list) -> MIMEMultipart:
+               html: str, images: list, plain: Optional[str] = None) -> MIMEMultipart:
     msg = MIMEMultipart("related")
     msg["Subject"] = Header(subject, "utf-8")
     msg["From"] = formataddr((sender_name, sender_email)) if sender_name else sender_email
     msg["To"] = to_addr
     alt = MIMEMultipart("alternative")
     msg.attach(alt)
+    # multipart/alternative: text/plain 을 먼저, HTML 을 나중에 (메일 앱은 마지막 파트를 우선 표시)
+    if plain:
+        alt.attach(MIMEText(plain, "plain", "utf-8"))
     alt.attach(MIMEText(html, "html", "utf-8"))
     for cid, data, subtype in images:
         part = MIMEImage(data, _subtype=subtype)
@@ -505,7 +510,8 @@ def stats(user: dict = Depends(current_user)):
 
 @app.post("/api/preview")
 def preview(body: PreviewBody, user: dict = Depends(current_user)):
-    use_plain = body.body_mode in ("text", "both")
+    # 'both': 화면에는 HTML 파트가 보이므로 미리보기도 HTML 본문만 그린다
+    use_plain = body.body_mode == "text"
     use_html = body.body_mode in ("html", "both")
     body_src = to_data_uri(decode_image(body.body_image_b64))
     footer_src = None
@@ -537,8 +543,25 @@ def preview(body: PreviewBody, user: dict = Depends(current_user)):
 def send_mail(body: SendBody, user: dict = Depends(current_user)):
     sender_email = user["email"]  # 요청 본문의 sender_email은 신뢰하지 않음
     sender_name = _clean_name(body.sender_name) or user["name"]
-    use_plain = body.body_mode in ("text", "both")
+    send_plain_part = body.body_mode in ("text", "both")   # text/plain 파트를 함께 보낼지
+    use_plain = body.body_mode == "text"                   # HTML 안에 텍스트 본문을 렌더링할지
     use_html = body.body_mode in ("html", "both")
+
+    # 발송 전 검사: 제목/본문 비어 있음, 일일 한도(500건)
+    if not body.subject.strip():
+        raise HTTPException(400, "제목을 입력해 주세요.")
+    if (send_plain_part and not body.plain_body.strip()) or (use_html and not body.html_body.strip()):
+        raise HTTPException(400, "본문을 입력해 주세요.")
+    try:
+        today_cnt = int(db.sent_today_by_sender().get(sender_email, 0))
+    except Exception:
+        today_cnt = 0
+    if not body.allow_over_limit and today_cnt + len(body.targets) > GMAIL_DAILY_LIMIT:
+        raise HTTPException(
+            400,
+            f"오늘 이 계정 발송 {today_cnt}건 + 이번 {len(body.targets)}건 = {today_cnt + len(body.targets)}건으로 "
+            f"일일 한도({GMAIL_DAILY_LIMIT}건)를 넘습니다. 대상을 줄이거나, 한도가 더 큰 계정이면 확인 후 진행해 주세요.",
+        )
 
     body_bytes = decode_image(body.body_image_b64)
     footer_bytes = decode_image(body.footer_image_b64) if body.footer_mode == "image" else None
@@ -598,7 +621,13 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
                 images.append(("footer_image", footer_bytes, sniff_image_subtype(footer_bytes)))
             images.extend(inline_images)
 
-            msg = build_mime(sender_name, sender_email, to_addr, subj, html, images)
+            plain_part = None
+            if send_plain_part and body.plain_body.strip():
+                plain_part = build_plain_text(
+                    row, body.plain_body, footer_text, sender_name,
+                    form_url=body.form_url, include_form=body.include_form,
+                )
+            msg = build_mime(sender_name, sender_email, to_addr, subj, html, images, plain_part)
             try:
                 server.sendmail(sender_email, to_addr, msg.as_string())
             except smtplib.SMTPServerDisconnected:

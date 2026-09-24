@@ -70,6 +70,25 @@ def safe_url(url: str | None) -> str:
     return u if re.match(r"^https?://", u, re.I) else ""
 
 
+_FORM_EDIT = re.compile(r"^(https?://docs\.google\.com/forms/d/(?:e/)?[\w-]+)/(?:edit|viewform)?(?:[?#].*)?$", re.I)
+
+
+def normalize_form_url(url: str | None) -> str:
+    """구글 폼 링크 정리: 공백 제거, 응답자용 주소로 통일, http(s)만 허용.
+
+    - 편집 주소(.../forms/d/<id>/edit)를 붙여 넣어도 응답자용 .../viewform 으로 바꿔 줍니다.
+      (편집 주소는 받는 사람이 열 수 없음)
+    - forms.gle 짧은 주소와 그 밖의 http(s) 주소는 그대로 둡니다.
+    """
+    u = safe_url(url)
+    if not u:
+        return ""
+    m = _FORM_EDIT.match(u)
+    if m:
+        return m.group(1) + "/viewform"
+    return u
+
+
 def replace_placeholders(template: str, row: dict, sender_nm: str, form_url: str = "",
                          mode: str = "html") -> str:
     """치환 태그를 실제 값으로 변환.
@@ -77,14 +96,15 @@ def replace_placeholders(template: str, row: dict, sender_nm: str, form_url: str
     mode="subject": 메일 제목용 (줄바꿈만 제거, HTML 이스케이프 없음)
     mode="plain"  : 일반 텍스트 본문 (템플릿과 값 모두 HTML 이스케이프)
     mode="html"   : HTML 본문 (템플릿은 그대로, 엑셀/발신자 값만 이스케이프)
+    mode="raw"    : text/plain 파트용 순수 텍스트 (이스케이프 없음, 설문 버튼은 링크로)
     """
     text = str(template or "")
     if mode == "plain":
         text = _html.escape(text, quote=False)
 
-    if mode == "subject":
+    if mode in ("subject", "raw"):
         def esc(s: str) -> str:
-            return re.sub(r"[\r\n]+", " ", s)
+            return re.sub(r"[\r\n]+", " ", s) if mode == "subject" else s
     else:
         def esc(s: str) -> str:
             return _html.escape(s, quote=False)
@@ -96,16 +116,18 @@ def replace_placeholders(template: str, row: dict, sender_nm: str, form_url: str
                 return str(v)
         return ""
 
-    url = safe_url(form_url)
+    url = normalize_form_url(form_url)
     button = ""
-    if url and mode != "subject":
+    if url and mode == "raw":
+        button = url
+    elif url and mode != "subject":
         button = (
             f'<div style="text-align:center;margin-top:12px;">'
             f'<a href="{_html.escape(url, quote=True)}" target="_blank" '
             f'style="display:inline-block;background:#0b66c3;color:#fff;'
             f'padding:12px 16px;border-radius:8px;text-decoration:none;font-weight:600;">설문 작성하기</a></div>'
         )
-    link = url if mode == "subject" else _html.escape(url, quote=True)
+    link = url if mode in ("subject", "raw") else _html.escape(url, quote=True)
 
     reps = {
         "{회사명}": esc(val("회사명", "company")),
@@ -207,10 +229,10 @@ def build_email_html(
 
     form_block = ""
     form_tags = ("{구글설문링크}", "{구글설문버튼}")
-    if include_form and safe_url(form_url) and not any(t in tpl for tpl in used_templates for t in form_tags):
+    if include_form and normalize_form_url(form_url) and not any(t in tpl for tpl in used_templates for t in form_tags):
         form_block = (
             f'<div style="text-align:center;margin-top:18px;">'
-            f'<a href="{_html.escape(safe_url(form_url), quote=True)}" target="_blank" '
+            f'<a href="{_html.escape(normalize_form_url(form_url), quote=True)}" target="_blank" '
             f'style="display:inline-block;background:#0b66c3;color:#fff;padding:12px 16px;'
             f'border-radius:8px;text-decoration:none;font-weight:600;">설문 작성하기</a></div>'
         )
@@ -225,6 +247,25 @@ def build_email_html(
 </div></body></html>
 """
     return subj, full
+
+
+def build_plain_text(row: dict, plain_body: str, footer_text: str = "", sender_name: str = "",
+                     form_url: str = "", include_form: bool = False) -> str:
+    """multipart/alternative 의 text/plain 파트용 순수 텍스트 (HTML 이스케이프 없음)."""
+    def fill(t: str) -> str:
+        t = str(t or "").replace("{구글설문버튼}", "{구글설문링크}")
+        t = t.replace(IMG_MARKER, "").replace("{푸터이미지}", "")
+        t = replace_placeholders(t, row, sender_name, form_url, mode="raw")
+        return t.replace("\r\n", "\n").strip()
+
+    parts = [fill(plain_body)]
+    url = normalize_form_url(form_url)
+    if include_form and url and url not in parts[0]:
+        parts.append(f"설문 링크: {url}")
+    footer = fill(footer_text)
+    if footer:
+        parts.append(footer)
+    return "\n\n".join(x for x in parts if x)
 
 
 _DATA_IMG = re.compile(

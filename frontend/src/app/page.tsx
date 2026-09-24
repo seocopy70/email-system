@@ -465,6 +465,28 @@ export default function Home() {
       alert("제목과 본문을 입력해 주세요.");
       return;
     }
+    if (includeForm && formUrl.trim() && !/^https?:\/\//i.test(formUrl.trim())) {
+      alert("구글 폼 링크는 https:// 로 시작해야 합니다. 설문지 탭에서 확인해 주세요.");
+      return;
+    }
+    // 일일 한도(Gmail 500건): 서버 기준 오늘 발송 수를 다시 가져와 확인
+    let allowOver = false;
+    try {
+      const stt = await api.stats();
+      const todayCnt = Number(stt.sent_today?.[user.email] ?? 0);
+      setUser((u) => (u ? { ...u, sent_today: todayCnt } : u));
+      const limit = user.daily_limit || 500;
+      if (todayCnt + targets.length > limit) {
+        const ok = window.confirm(
+          `오늘 이 계정 발송 ${todayCnt}건 + 이번 ${targets.length}건 = ${todayCnt + targets.length}건으로 일일 한도(${limit}건)를 넘습니다.\n` +
+            "Gmail이 중간에 발송을 막을 수 있습니다. 그래도 진행할까요? (Google Workspace 등 한도가 더 큰 계정만)"
+        );
+        if (!ok) return;
+        allowOver = true;
+      }
+    } catch {
+      /* 조회 실패 시 서버가 한 번 더 검사한다 */
+    }
     setBusy(true);
     setSendResult("");
     try {
@@ -487,10 +509,12 @@ export default function Home() {
         footer_image_width_pct: footerImageWidth,
         targets,
         delay_sec: 2,
+        allow_over_limit: allowOver,
       });
       setSendResult(`성공 ${r.sent} · 건너뜀 ${r.skipped} · 실패 ${r.failed}`);
       if (r.errors?.length) setSendResult((s) => s + "\n" + r.errors.join("\n"));
       setStatusMap(await api.topicStatus(topicId));
+      setUser((u) => (u ? { ...u, sent_today: u.sent_today + r.sent } : u));
       if (bottomTab === "logs") setLogs(await api.topicLogs(topicId));
     } catch (e: any) {
       setSendResult(e.message || "발송 오류");
@@ -894,6 +918,12 @@ export default function Home() {
                   <input type="checkbox" checked={includeForm} onChange={(e) => setIncludeForm(e.target.checked)} />
                   메일에 설문 버튼 포함
                 </label>
+                {formUrl.trim() && !/^https?:\/\//i.test(formUrl.trim()) && (
+                  <p className="text-xs text-red-600">링크는 https:// 로 시작해야 합니다.</p>
+                )}
+                {/docs\.google\.com\/forms\/d\/[\w-]+\/edit/i.test(formUrl) && (
+                  <p className="text-xs text-ink-500">편집 주소는 받는 사람이 열 수 없어, 발송할 때 응답자용 주소(viewform)로 자동 변환됩니다.</p>
+                )}
               </div>
             )}
             </div>
