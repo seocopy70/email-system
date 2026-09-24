@@ -52,3 +52,8 @@ streamlit run auto_em.py
 
 자세한 배포: [DEPLOY.md](./DEPLOY.md)
 
+
+## Oracle Cloud Always Free 배포 (SMTP 제한 없음)
+
+백엔드를 Oracle Cloud Always Free에 올리면 Gmail SMTP가 차단되지 않습니다.  
+자세한 절차는 [DEPLOY.md](./DEPLOY.md) 의 **방법 A — Oracle Cloud Always Free** 섹션을 참고하세요.
