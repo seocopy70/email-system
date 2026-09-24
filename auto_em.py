@@ -325,8 +325,8 @@ def apply_preset(preset_name: str, custom: dict = None):
     """내장/사용자 템플릿을 session_state에 반영"""
     if custom:
         st.session_state["email_subject_template"] = custom.get("subject") or ""
-        st.session_state["email_body_template"] = custom.get("plain_body") or ""
-        st.session_state["email_html_template"] = custom.get("html_body") or ""
+        body_field_set("email_body_template", custom.get("plain_body") or "")
+        body_field_set("email_html_template", custom.get("html_body") or "")
         st.session_state["body_mode"] = custom.get("body_mode") or "html"
         st.session_state["image_insert_mode"] = custom.get("image_insert_mode") or "본문 하단 첨부"
         st.session_state["image_width_pct"] = int(custom.get("image_width_pct") or 80)
@@ -335,8 +335,8 @@ def apply_preset(preset_name: str, custom: dict = None):
         return
     preset = EMAIL_PRESETS.get(preset_name) or EMAIL_PRESETS["기본형"]
     st.session_state["email_subject_template"] = preset["subject"]
-    st.session_state["email_body_template"] = preset["plain_body"]
-    st.session_state["email_html_template"] = preset["html_body"]
+    body_field_set("email_body_template", preset["plain_body"])
+    body_field_set("email_html_template", preset["html_body"])
     if preset.get("use_html") and preset.get("use_plain_text"):
         st.session_state["body_mode"] = "both"
     elif preset.get("use_plain_text"):
@@ -352,9 +352,53 @@ def apply_preset(preset_name: str, custom: dict = None):
 def clear_compose_fields():
     """아무 템플릿도 선택하지 않은 '직접 작성' 상태로 되돌린다 (빈 칸 + 회색 예시)."""
     st.session_state["email_subject_template"] = ""
-    st.session_state["email_body_template"] = ""
-    st.session_state["email_html_template"] = ""
+    body_field_set("email_body_template", "")
+    body_field_set("email_html_template", "")
     st.session_state["active_preset"] = NO_TEMPLATE
+
+
+# ---- 본문 입력칸 백업 -------------------------------------------------------
+# Streamlit은 이번 실행에서 화면에 그려지지 않은 위젯의 값을 지웁니다. 본문 형식을
+# (HTML / 텍스트 / 둘 다)로 바꾸면 화면에서 사라진 입력칸의 내용이 날아가므로,
+# 값을 별도 키(_body_backup)에 따로 보관하고 다시 나타날 때 되살립니다.
+# 지워진 뒤에도 세션에 옛 기본값이 되살아나 있을 수 있어 "키가 없는지"로는 판단할 수
+# 없고, "직전 실행에서 그려졌는지(_body_rendered)"로 값을 믿을지 정합니다.
+_BODY_FIELDS = ("email_body_template", "email_html_template")
+
+
+def _body_bak() -> dict:
+    return st.session_state.setdefault("_body_backup", {})
+
+
+def body_field_set(key: str, value: str):
+    """입력칸 값을 코드에서 바꿀 때: 세션과 백업을 함께 갱신."""
+    st.session_state[key] = value
+    _body_bak()[key] = value
+
+
+def body_backup_snapshot():
+    """직전 실행에서 화면에 있던 입력칸의 최신 값을 백업에 반영."""
+    rendered = st.session_state.get("_body_rendered", ())
+    bak = _body_bak()
+    for k in _BODY_FIELDS:
+        if k in rendered and k in st.session_state:
+            bak[k] = st.session_state[k]
+
+
+def body_backup_restore(key: str):
+    """직전 실행에서 안 그려졌던 입력칸을 다시 그리기 직전, 백업 값으로 되돌림."""
+    if key not in st.session_state.get("_body_rendered", ()) and key in _body_bak():
+        st.session_state[key] = _body_bak()[key]
+
+
+def body_field_get(key: str) -> str:
+    """현재 유효한 본문 값(화면에 없는 칸은 백업 값)."""
+    if key in st.session_state.get("_body_rendered", ()):
+        return st.session_state.get(key) or ""
+    bak = _body_bak()
+    if key in bak:
+        return bak[key] or ""
+    return st.session_state.get(key) or ""
 
 
 def _append_to_field(field_key: str, text: str):
@@ -696,6 +740,8 @@ if not st.session_state.get("_prefs_loaded"):
     st.session_state.setdefault("email_subject_template", _base["subject"])
     st.session_state.setdefault("email_body_template", _base["plain_body"])
     st.session_state.setdefault("email_html_template", _base["html_body"])
+    for _k in _BODY_FIELDS:
+        _body_bak().setdefault(_k, st.session_state.get(_k, ""))
     st.session_state.setdefault("body_mode", prefs.get("body_mode") or "html")
     _fm = prefs.get("footer_mode") or "text"
     if _fm in ("html", "both"):
@@ -981,8 +1027,8 @@ def _compose_and_preview():
                                 db.save_mail_template(sender_email, topic_id, tname, {
                                     "subject": st.session_state.get("email_subject_template"),
                                     "body_mode": st.session_state.get("body_mode", "html"),
-                                    "plain_body": st.session_state.get("email_body_template"),
-                                    "html_body": st.session_state.get("email_html_template"),
+                                    "plain_body": body_field_get("email_body_template"),
+                                    "html_body": body_field_get("email_html_template"),
                                     "image_insert_mode": st.session_state.get("image_insert_mode"),
                                     "image_width_pct": st.session_state.get("image_width_pct", 80),
                                     "image_align": st.session_state.get("image_align", "가운데"),
@@ -1034,6 +1080,15 @@ def _compose_and_preview():
                         horizontal=True, key="body_mode", label_visibility="collapsed")
                     use_plain_text_body = body_mode in ("text", "both")
                     use_html_body = body_mode in ("html", "both")
+                    # 형식을 바꿔 화면에서 사라졌다 돌아오는 입력칸의 내용을 지켜 준다.
+                    body_backup_snapshot()
+                    if use_plain_text_body:
+                        body_backup_restore("email_body_template")
+                    if use_html_body:
+                        body_backup_restore("email_html_template")
+                    st.session_state["_body_rendered"] = tuple(
+                        k for k, on in (("email_body_template", use_plain_text_body),
+                                        ("email_html_template", use_html_body)) if on)
                     email_body_template = st.session_state.get("email_body_template", "")
                     email_html_template = st.session_state.get("email_html_template", "")
 
