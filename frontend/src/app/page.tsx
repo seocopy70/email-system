@@ -749,13 +749,14 @@ export default function Home() {
             <div className="flex gap-2">
               <select
                 className="input"
-                aria-label="기본 서식 선택"
-                value={presetNames.includes(activeTmpl) ? activeTmpl : NO_TMPL}
+                aria-label="템플릿 선택"
+                value={activeTmpl}
                 disabled={topicId == null}
                 onChange={(e) => {
                   const v = e.target.value;
                   setDelTmplTarget(null);
                   if (v === NO_TMPL) clearCompose();
+                  else if (v.startsWith("★ ")) applyUserTemplate(v.slice(2)).catch(console.error);
                   else applyPreset(v);
                 }}
               >
@@ -763,6 +764,11 @@ export default function Home() {
                 {presetNames.map((n) => (
                   <option key={n} value={n}>
                     {n}
+                  </option>
+                ))}
+                {userTmplNames.map((n) => (
+                  <option key={n} value={`★ ${n}`}>
+                    ★ {n}
                   </option>
                 ))}
               </select>
@@ -779,70 +785,66 @@ export default function Home() {
               >
                 <PlusIcon />
               </button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-1.5">
-              {userTmplNames.length === 0 ? (
-                <span className="text-xs text-ink-500">
-                  저장된 템플릿 없음 · 위 ＋ 버튼으로 지금 내용을 템플릿으로 저장하면 여기에 삭제 아이콘과 함께 나타납니다
-                </span>
-              ) : (
-                userTmplNames.map((n) => (
-                  <span key={n} className="tmpl-chip" data-active={activeTmpl === `★ ${n}`}>
-                    <button type="button" className="tmpl-chip-name" onClick={() => applyUserTemplate(n).catch(console.error)}>
-                      ★ {n}
-                    </button>
-                    <button
-                      type="button"
-                      className="tmpl-chip-del"
-                      title="이 템플릿 삭제"
-                      aria-label={`${n} 템플릿 삭제`}
-                      onClick={() => setDelTmplTarget(n)}
-                    >
-                      <TrashIcon />
-                    </button>
-                  </span>
-                ))
-              )}
+              <button
+                type="button"
+                className="btn-ghost !px-2.5"
+                title={activeTmpl.startsWith("★ ") ? "이 템플릿 삭제" : "저장된(★) 템플릿을 선택하면 삭제할 수 있습니다"}
+                aria-label="이 템플릿 삭제"
+                disabled={!activeTmpl.startsWith("★ ")}
+                onClick={() => setDelTmplTarget(activeTmpl.slice(2))}
+              >
+                <TrashIcon />
+              </button>
             </div>
 
             {showSave && (
-              <div className="flex gap-2">
-                <input
-                  className="input"
-                  aria-label="새 템플릿 이름"
-                  placeholder="템플릿 이름"
-                  value={saveTmplName}
-                  onChange={(e) => setSaveTmplName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && saveTemplate()}
-                />
-                <button type="button" className="btn-primary whitespace-nowrap" onClick={saveTemplate}>
-                  확인
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost whitespace-nowrap"
-                  onClick={() => {
-                    setShowSave(false);
-                    setSaveTmplName("");
-                  }}
-                >
-                  취소
-                </button>
+              <div className="space-y-2 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2.5">
+                <div className="text-sm font-medium text-ink-900">현재 메일을 템플릿으로 저장하기</div>
+                <div className="flex gap-2">
+                  <input
+                    className="input"
+                    aria-label="새 템플릿 이름"
+                    placeholder="템플릿 이름"
+                    value={saveTmplName}
+                    onChange={(e) => setSaveTmplName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && saveTemplate()}
+                  />
+                  <button type="button" className="btn-primary whitespace-nowrap" onClick={saveTemplate}>
+                    확인
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost whitespace-nowrap"
+                    onClick={() => {
+                      setShowSave(false);
+                      setSaveTmplName("");
+                    }}
+                  >
+                    취소
+                  </button>
+                </div>
               </div>
             )}
             {delTmplTarget && (
-              <div className="flex flex-wrap items-center gap-2 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                <span className="flex-1">「{delTmplTarget}」 템플릿을 삭제할까요? 되돌릴 수 없습니다.</span>
-                <button type="button" className="btn-primary" onClick={() => doDeleteTemplate(delTmplTarget)}>
-                  삭제
-                </button>
-                <button type="button" className="btn-ghost" onClick={() => setDelTmplTarget(null)}>
-                  취소
-                </button>
+              <div className="space-y-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-sm">
+                <div>
+                  <div className="font-medium text-ink-900">현재 템플릿을 삭제하기</div>
+                  <div className="text-ink-500">「{delTmplTarget}」 · 되돌릴 수 없습니다.</div>
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" className="btn-primary" onClick={() => doDeleteTemplate(delTmplTarget)}>
+                    삭제
+                  </button>
+                  <button type="button" className="btn-ghost" onClick={() => setDelTmplTarget(null)}>
+                    취소
+                  </button>
+                </div>
               </div>
             )}
 
+            <div className="flex justify-end">
+              <VarMenu tags={varTags} onPick={(tag) => insertTag("subject", tag)} />
+            </div>
             <input
               ref={subjectRef}
               className="input"
@@ -851,7 +853,6 @@ export default function Home() {
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
             />
-            <VarMenu tags={varTags} onPick={(tag) => insertTag("subject", tag)} />
 
             <div className="doc-tabs">
               {(["body", "footer", "form"] as const).map((tab) => (
@@ -885,7 +886,9 @@ export default function Home() {
                 </div>
                 {(bodyMode === "text" || bodyMode === "both") && (
                   <>
-                    <VarMenu tags={varTags} onPick={(tag) => insertTag("plain", tag)} />
+                    <div className="flex justify-end">
+                      <VarMenu tags={varTags} onPick={(tag) => insertTag("plain", tag)} />
+                    </div>
                     <textarea
                       ref={plainRef}
                       className="input min-h-[120px] font-mono text-xs"
@@ -898,7 +901,9 @@ export default function Home() {
                 )}
                 {(bodyMode === "html" || bodyMode === "both") && (
                   <>
-                    <VarMenu tags={varTags} onPick={(tag) => insertTag("html", tag)} />
+                    <div className="flex justify-end">
+                      <VarMenu tags={varTags} onPick={(tag) => insertTag("html", tag)} />
+                    </div>
                     <textarea
                       ref={htmlRef}
                       className="input min-h-[140px] font-mono text-xs"
@@ -1029,8 +1034,8 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="card p-4 lg:col-span-2 space-y-3">
-          <div className="flex flex-wrap gap-1 border-b border-ink-200 pb-1">
+        <section className="lg:col-span-2">
+          <div className="doc-tabs">
             {(
               [
                 ["list", "발송 명단"],
@@ -1041,16 +1046,16 @@ export default function Home() {
             ).map(([k, label]) => (
               <button
                 key={k}
-                className={`px-3 py-2 text-sm transition ${
-                  bottomTab === k ? "border-b-2 border-brass text-ink-900 font-medium" : "text-ink-500 hover:text-ink-700"
-                }`}
+                type="button"
+                className="doc-tab"
+                data-active={bottomTab === k}
                 onClick={() => setBottomTab(k as BottomTab)}
               >
                 {label}
               </button>
             ))}
           </div>
-
+          <div className="card rounded-tl-none p-4 space-y-3">
           {bottomTab === "list" && (
             <div className="space-y-3">
               <input type="file" accept=".xlsx,.xls" onChange={(e) => e.target.files?.[0] && onExcel(e.target.files[0])} />
@@ -1224,6 +1229,7 @@ export default function Home() {
               </button>
             </div>
           )}
+          </div>
         </section>
       </main>
     </div>

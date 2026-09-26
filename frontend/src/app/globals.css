@@ -13,7 +13,7 @@ body {
 }
 
 .card {
-  @apply bg-white border border-ink-200 rounded-lg;
+  @apply bg-white border border-ink-200 rounded-lg shadow-[0_1px_2px_rgba(21,42,34,0.05)];
 }
 
 /* 고정 높이 스크롤 박스: 내용이 길어도 카드 크기는 그대로, 안에서만 스크롤 */
@@ -57,11 +57,6 @@ body {
   @apply btn bg-white/10 text-ink-50 hover:bg-white/20;
 }
 
-.chip {
-  @apply rounded-full border border-ink-200 bg-white px-2.5 py-1 text-xs text-ink-700
-    hover:border-brass hover:bg-brass-50/60 transition cursor-pointer;
-}
-
 /* 변수 삽입 드롭다운: 늘어놓은 칩 대신 클릭해서 여는 목록 */
 .var-menu-btn {
   @apply inline-flex items-center gap-1.5 rounded-md border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-medium text-ink-700
@@ -83,28 +78,12 @@ body {
   @apply px-3 py-1.5 text-sm rounded-t-md border border-b-0 border-transparent transition;
 }
 .doc-tab[data-active="true"] {
-  @apply bg-white border-ink-200 text-ink-900 font-semibold;
+  @apply bg-white border-ink-200 border-t-2 border-t-brass text-ink-900 font-semibold -mt-px;
 }
 .doc-tab[data-active="false"] {
   @apply text-ink-500 hover:text-ink-700 hover:bg-ink-100/60;
 }
 
-/* 저장된(★) 템플릿 칩: 이름 + 인라인 삭제 아이콘 */
-.tmpl-chip {
-  @apply inline-flex items-center gap-1.5 rounded-full border px-1 pl-3 py-1 text-xs transition;
-}
-.tmpl-chip[data-active="false"] {
-  @apply border-ink-200 bg-white text-ink-700 hover:border-brass;
-}
-.tmpl-chip[data-active="true"] {
-  @apply border-brass bg-brass-50/70 text-ink-900 font-medium;
-}
-.tmpl-chip-name {
-  @apply bg-transparent p-0 text-inherit;
-}
-.tmpl-chip-del {
-  @apply rounded-full p-1 text-ink-500 hover:bg-ink-200/70 hover:text-red-700 transition;
-}
 
 .seg {
   @apply inline-flex rounded-lg bg-ink-100 p-1 gap-0.5;
