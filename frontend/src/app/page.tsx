@@ -1019,12 +1019,12 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="card p-4 lg:sticky lg:top-4 lg:self-start h-fit space-y-2">
+        <section className="card p-4 lg:sticky lg:top-4 lg:self-start h-fit lg:max-h-[calc(100vh-2rem)] overflow-y-auto space-y-2">
           <div className="card-title">실시간 미리보기</div>
           <div className="text-xs text-ink-500 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2">
             <b>제목</b> {previewSubj || "—"}
           </div>
-          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden h-[70vh] min-h-[420px] max-h-[720px]">
+          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden h-[60vh] min-h-[360px] max-h-[640px]">
             <iframe
               title="preview"
               className="w-full h-full bg-white"
