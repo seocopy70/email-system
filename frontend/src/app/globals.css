@@ -1,3 +1,5 @@
+@import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -19,9 +21,9 @@ body {
   @apply overflow-y-auto overflow-x-hidden border border-ink-200 rounded-md bg-ink-50/60 p-3;
 }
 
-/* 섹션 표지: 트래킹 늘린 대문자 라벨 대신, 세리프 소제목 + 짧은 브래스 표식 */
+/* 섹션 표지: 트래킹 늘린 대문자 라벨 대신, 또렷한 산세리프 소제목 + 짧은 브래스 표식 */
 .card-title {
-  @apply text-[13.5px] font-semibold text-ink-900 mb-2 font-serif flex items-center gap-2;
+  @apply text-[13.5px] font-semibold text-ink-900 mb-2 flex items-center gap-2 tracking-tight;
 }
 .card-title::before {
   content: "";
@@ -58,6 +60,33 @@ body {
 .chip {
   @apply rounded-full border border-ink-200 bg-white px-2.5 py-1 text-xs text-ink-700
     hover:border-brass hover:bg-brass-50/60 transition cursor-pointer;
+}
+
+/* 변수 삽입 드롭다운: 늘어놓은 칩 대신 클릭해서 여는 목록 */
+.var-menu-btn {
+  @apply inline-flex items-center gap-1.5 rounded-md border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-medium text-ink-700
+    hover:border-brass hover:text-ink-900 transition;
+}
+.var-menu-panel {
+  @apply absolute z-20 mt-1 min-w-[168px] rounded-md border border-ink-200 bg-white p-1
+    shadow-[0_10px_28px_rgba(21,42,34,0.14)];
+}
+.var-menu-item {
+  @apply block w-full rounded px-2.5 py-1.5 text-left text-sm text-ink-700 hover:bg-ink-100/70 hover:text-ink-900 transition;
+}
+
+/* 본문/푸터/설문지 같은 서류함 폴더탭: 선택된 탭이 아래 패널과 이어져 보이도록 */
+.doc-tabs {
+  @apply flex gap-1 -mb-px relative z-10;
+}
+.doc-tab {
+  @apply px-3 py-1.5 text-sm rounded-t-md border border-b-0 border-transparent transition;
+}
+.doc-tab[data-active="true"] {
+  @apply bg-white border-ink-200 text-ink-900 font-semibold;
+}
+.doc-tab[data-active="false"] {
+  @apply text-ink-500 hover:text-ink-700 hover:bg-ink-100/60;
 }
 
 /* 저장된(★) 템플릿 칩: 이름 + 인라인 삭제 아이콘 */

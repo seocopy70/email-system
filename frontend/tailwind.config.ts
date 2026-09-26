@@ -20,8 +20,7 @@ const config: Config = {
         },
       },
       fontFamily: {
-        serif: ["var(--font-serif)", "ui-serif", "serif"],
-        sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
+        sans: ["Pretendard Variable", "Pretendard", "ui-sans-serif", "system-ui", "sans-serif"],
       },
     },
   },

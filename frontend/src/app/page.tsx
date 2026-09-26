@@ -30,6 +30,56 @@ const TrashIcon = () => (
   </svg>
 );
 
+const ChevronDownIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M6 9l6 6 6-6" />
+  </svg>
+);
+
+// 변수 태그를 한 줄로 늘어놓는 대신, 클릭하면 열리는 목록에서 골라 커서 위치에 끼워 넣는 메뉴
+function VarMenu({ tags, onPick }: { tags: { label: string; tag: string }[]; onPick: (tag: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  if (!tags.length) return null;
+
+  return (
+    <div className="relative inline-block" ref={boxRef}>
+      <button type="button" className="var-menu-btn" onClick={() => setOpen((v) => !v)}>
+        변수 삽입
+        <ChevronDownIcon />
+      </button>
+      {open && (
+        <div className="var-menu-panel" role="menu">
+          {tags.map((v) => (
+            <button
+              key={v.tag}
+              type="button"
+              className="var-menu-item"
+              role="menuitem"
+              onClick={() => {
+                onPick(v.tag);
+                setOpen(false);
+              }}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 아직 안 보냈거나 실패한 수신자만 기본 선택
 function pickSelectable(items: any[], st: Record<string, any>): Set<string> {
   return new Set(
@@ -88,6 +138,10 @@ export default function Home() {
   const [delTmplTarget, setDelTmplTarget] = useState<string | null>(null);
   const [topicMsg, setTopicMsg] = useState("");
   const lastEnteredTopic = useRef<number | null>(null);
+  const subjectRef = useRef<HTMLInputElement>(null);
+  const plainRef = useRef<HTMLTextAreaElement>(null);
+  const htmlRef = useRef<HTMLTextAreaElement>(null);
+  const footerRef = useRef<HTMLTextAreaElement>(null);
 
   const [bottomTab, setBottomTab] = useState<BottomTab>("list");
   const [stats, setStats] = useState<any>(null);
@@ -286,11 +340,26 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, topicId]);
 
+  // 커서가 있던 자리에 변수 태그를 끼워 넣고, 태그 바로 뒤로 커서를 되돌린다
   function insertTag(field: "subject" | "plain" | "html" | "footer", tag: string) {
-    if (field === "subject") setSubject((s) => s + tag);
-    if (field === "plain") setPlainBody((s) => s + tag);
-    if (field === "html") setHtmlBody((s) => s + tag);
-    if (field === "footer") setFooterText((s) => s + tag);
+    function applyAt(el: HTMLInputElement | HTMLTextAreaElement | null, value: string, setValue: (v: string) => void) {
+      if (!el) {
+        setValue(value + tag);
+        return;
+      }
+      const start = el.selectionStart ?? value.length;
+      const end = el.selectionEnd ?? value.length;
+      setValue(value.slice(0, start) + tag + value.slice(end));
+      const pos = start + tag.length;
+      requestAnimationFrame(() => {
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      });
+    }
+    if (field === "subject") applyAt(subjectRef.current, subject, setSubject);
+    if (field === "plain") applyAt(plainRef.current, plainBody, setPlainBody);
+    if (field === "html") applyAt(htmlRef.current, htmlBody, setHtmlBody);
+    if (field === "footer") applyAt(footerRef.current, footerText, setFooterText);
   }
 
   async function onBodyImage(file: File | null) {
@@ -536,7 +605,7 @@ export default function Home() {
         <div className="w-full max-w-md">
           <div className="mb-5 text-center">
             <div className="inline-block h-[3px] w-10 bg-brass rounded-full mb-3" />
-            <h1 className="font-serif text-xl font-semibold text-ink-900">기업 이메일 발송 시스템</h1>
+            <h1 className="text-xl font-bold tracking-tight text-ink-900">기업 이메일 발송 시스템</h1>
             <p className="text-sm text-ink-500 mt-1">등록된 Gmail + 앱 비밀번호로 로그인</p>
           </div>
           <div className="card p-6 space-y-3">
@@ -568,7 +637,7 @@ export default function Home() {
       <header className="bg-ink-900 border-b-2 border-brass px-5 py-3.5">
         <div className="max-w-[1400px] mx-auto flex items-center justify-between gap-4">
           <div>
-            <h1 className="font-serif text-base font-semibold text-ink-50 tracking-tight">기업 이메일 발송 시스템</h1>
+            <h1 className="text-base font-bold text-ink-50 tracking-tight">기업 이메일 발송 시스템</h1>
             <p className="text-xs text-ink-50/60">맞춤 메일 · 중복 발송 방지 · 다중 계정</p>
           </div>
           <div className="flex items-center gap-4 text-sm">
@@ -712,9 +781,13 @@ export default function Home() {
               </button>
             </div>
 
-            {userTmplNames.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {userTmplNames.map((n) => (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {userTmplNames.length === 0 ? (
+                <span className="text-xs text-ink-500">
+                  저장된 템플릿 없음 · 위 ＋ 버튼으로 지금 내용을 템플릿으로 저장하면 여기에 삭제 아이콘과 함께 나타납니다
+                </span>
+              ) : (
+                userTmplNames.map((n) => (
                   <span key={n} className="tmpl-chip" data-active={activeTmpl === `★ ${n}`}>
                     <button type="button" className="tmpl-chip-name" onClick={() => applyUserTemplate(n).catch(console.error)}>
                       ★ {n}
@@ -729,9 +802,9 @@ export default function Home() {
                       <TrashIcon />
                     </button>
                   </span>
-                ))}
-              </div>
-            )}
+                ))
+              )}
+            </div>
 
             {showSave && (
               <div className="flex gap-2">
@@ -770,22 +843,23 @@ export default function Home() {
               </div>
             )}
 
-            <input className="input" aria-label="제목" placeholder={ex.subject || "제목"} value={subject} onChange={(e) => setSubject(e.target.value)} />
-            <div className="flex flex-wrap gap-1.5">
-              {varTags.map((v) => (
-                <button key={v.tag} type="button" className="chip" onClick={() => insertTag("subject", v.tag)}>
-                  {v.label}
-                </button>
-              ))}
-            </div>
+            <input
+              ref={subjectRef}
+              className="input"
+              aria-label="제목"
+              placeholder={ex.subject || "제목"}
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+            />
+            <VarMenu tags={varTags} onPick={(tag) => insertTag("subject", tag)} />
 
-            <div className="flex gap-1 border-b border-ink-200">
+            <div className="doc-tabs">
               {(["body", "footer", "form"] as const).map((tab) => (
                 <button
                   key={tab}
-                  className={`px-3 py-2 text-sm transition ${
-                    activeTab === tab ? "border-b-2 border-brass text-ink-900 font-medium" : "text-ink-500 hover:text-ink-700"
-                  }`}
+                  type="button"
+                  className="doc-tab"
+                  data-active={activeTab === tab}
                   onClick={() => setActiveTab(tab)}
                 >
                   {tab === "body" ? "본문" : tab === "footer" ? "푸터" : "설문지"}
@@ -811,26 +885,28 @@ export default function Home() {
                 </div>
                 {(bodyMode === "text" || bodyMode === "both") && (
                   <>
-                    <div className="flex flex-wrap gap-1">
-                      {varTags.map((v) => (
-                        <button key={v.tag} type="button" className="chip" onClick={() => insertTag("plain", v.tag)}>
-                          {v.label}
-                        </button>
-                      ))}
-                    </div>
-                    <textarea className="input min-h-[120px] font-mono text-xs" aria-label="텍스트 본문" placeholder={ex.plain_body} value={plainBody} onChange={(e) => setPlainBody(e.target.value)} />
+                    <VarMenu tags={varTags} onPick={(tag) => insertTag("plain", tag)} />
+                    <textarea
+                      ref={plainRef}
+                      className="input min-h-[120px] font-mono text-xs"
+                      aria-label="텍스트 본문"
+                      placeholder={ex.plain_body}
+                      value={plainBody}
+                      onChange={(e) => setPlainBody(e.target.value)}
+                    />
                   </>
                 )}
                 {(bodyMode === "html" || bodyMode === "both") && (
                   <>
-                    <div className="flex flex-wrap gap-1">
-                      {varTags.map((v) => (
-                        <button key={v.tag} type="button" className="chip" onClick={() => insertTag("html", v.tag)}>
-                          {v.label}
-                        </button>
-                      ))}
-                    </div>
-                    <textarea className="input min-h-[140px] font-mono text-xs" aria-label="HTML 본문" placeholder={ex.html_body} value={htmlBody} onChange={(e) => setHtmlBody(e.target.value)} />
+                    <VarMenu tags={varTags} onPick={(tag) => insertTag("html", tag)} />
+                    <textarea
+                      ref={htmlRef}
+                      className="input min-h-[140px] font-mono text-xs"
+                      aria-label="HTML 본문"
+                      placeholder={ex.html_body}
+                      value={htmlBody}
+                      onChange={(e) => setHtmlBody(e.target.value)}
+                    />
                   </>
                 )}
                 <label className="flex items-center gap-2 text-sm">
@@ -880,6 +956,7 @@ export default function Home() {
                 </div>
                 {footerMode !== "none" && (
                   <textarea
+                    ref={footerRef}
                     className="input min-h-[72px]"
                     value={footerText}
                     onChange={(e) => setFooterText(e.target.value)}
