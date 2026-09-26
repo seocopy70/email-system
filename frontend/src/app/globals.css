@@ -67,7 +67,8 @@ body {
     shadow-[0_10px_28px_rgba(21,42,34,0.14)];
 }
 .var-menu-item {
-  @apply block w-full rounded px-2.5 py-1.5 text-left text-sm text-ink-700 hover:bg-ink-100/70 hover:text-ink-900 transition;
+  @apply block w-full rounded px-2.5 py-1.5 text-left text-sm text-ink-700 hover:bg-ink-100/70 hover:text-ink-900 transition
+    disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-700;
 }
 
 /* 본문/푸터/설문지 같은 서류함 폴더탭: 선택된 탭이 아래 패널과 이어져 보이도록 */

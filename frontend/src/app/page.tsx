@@ -37,7 +37,13 @@ const ChevronDownIcon = () => (
 );
 
 // 변수 태그를 한 줄로 늘어놓는 대신, 클릭하면 열리는 목록에서 골라 커서 위치에 끼워 넣는 메뉴
-function VarMenu({ tags, onPick }: { tags: { label: string; tag: string }[]; onPick: (tag: string) => void }) {
+function VarMenu({
+  tags,
+  onPick,
+}: {
+  tags: { label: string; tag: string; disabled?: boolean; hint?: string }[];
+  onPick: (tag: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
 
@@ -66,7 +72,10 @@ function VarMenu({ tags, onPick }: { tags: { label: string; tag: string }[]; onP
               type="button"
               className="var-menu-item"
               role="menuitem"
+              disabled={v.disabled}
+              title={v.disabled ? v.hint : undefined}
               onClick={() => {
+                if (v.disabled) return;
                 onPick(v.tag);
                 setOpen(false);
               }}
@@ -97,6 +106,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginName, setLoginName] = useState("");
+  const [loginNameHistory, setLoginNameHistory] = useState<string[]>([]);
   const [loginErr, setLoginErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -188,6 +198,7 @@ export default function Home() {
           if (p.use_footer_image) setFooterMode("image");
         }
         if (p.footer_image_width) setFooterImageWidth(Number(p.footer_image_width) || 60);
+        if (p.body_mode === "html" || p.body_mode === "text" || p.body_mode === "both") setBodyMode(p.body_mode);
       })
       .catch(() => {});
   }, [user, refreshTopics]);
@@ -255,6 +266,27 @@ export default function Home() {
     api.senders().then(setSenders).catch(console.error);
   }, [user, bottomTab]);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("loginNameHistory");
+      if (raw) setLoginNameHistory(JSON.parse(raw));
+    } catch {
+      // 무시: 브라우저 저장소를 못 쓰는 환경이면 그냥 자동완성 없이 진행
+    }
+  }, []);
+
+  function rememberLoginName(name: string) {
+    const v = name.trim();
+    if (!v) return;
+    try {
+      const next = [v, ...loginNameHistory.filter((n) => n !== v)].slice(0, 5);
+      setLoginNameHistory(next);
+      localStorage.setItem("loginNameHistory", JSON.stringify(next));
+    } catch {
+      // 무시
+    }
+  }
+
   async function doLogin() {
     setLoginErr("");
     setBusy(true);
@@ -262,6 +294,7 @@ export default function Home() {
       const u = await api.login(loginEmail, password, loginName || undefined);
       setAuthToken(u.token); // 이후 요청이 인증되도록 user 설정보다 먼저
       setUser(u);
+      rememberLoginName(loginName);
     } catch (e: any) {
       setLoginErr(e.message || "로그인 실패");
     } finally {
@@ -390,7 +423,7 @@ export default function Home() {
       use_footer_image: footerMode === "image",
       body_mode: bodyMode,
     });
-    alert("기본 설정을 저장했습니다.");
+    alert("기본 설정을 저장했습니다. (본문 형식 + 푸터 — 다음 로그인부터 자동 적용)");
   }
 
   async function addTopic() {
@@ -618,7 +651,21 @@ export default function Home() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <input className="input" placeholder="표시 이름 (선택)" autoComplete="off" value={loginName} onChange={(e) => setLoginName(e.target.value)} />
+            <input
+              className="input"
+              list="loginNameHistory"
+              placeholder="표시 이름 (선택, 비워두면 이전 이름 사용)"
+              autoComplete="off"
+              value={loginName}
+              onChange={(e) => setLoginName(e.target.value)}
+            />
+            {loginNameHistory.length > 0 && (
+              <datalist id="loginNameHistory">
+                {loginNameHistory.map((n) => (
+                  <option key={n} value={n} />
+                ))}
+              </datalist>
+            )}
             {loginErr && <p className="text-sm text-red-600">{loginErr}</p>}
             <button className="btn-primary w-full" disabled={busy} onClick={doLogin}>
               {busy ? "확인 중…" : "로그인"}
@@ -631,6 +678,10 @@ export default function Home() {
 
   const presetNames = Object.keys(presets);
   const userTmplNames = templates.map((t) => t.name);
+  // '본문 이미지 사용'을 체크하기 전까지는 {이미지} 변수를 끼워 넣어도 의미가 없으므로 비활성화
+  const varTagsForBody = varTags.map((v) =>
+    v.tag === "{이미지}" ? { ...v, disabled: !useBodyImage, hint: "먼저 아래 '본문 이미지 사용'을 체크하세요" } : v
+  );
 
   return (
     <div className="min-h-screen pb-10">
@@ -843,7 +894,7 @@ export default function Home() {
             )}
 
             <div className="flex justify-end">
-              <VarMenu tags={varTags} onPick={(tag) => insertTag("subject", tag)} />
+              <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("subject", tag)} />
             </div>
             <input
               ref={subjectRef}
@@ -887,7 +938,7 @@ export default function Home() {
                 {(bodyMode === "text" || bodyMode === "both") && (
                   <>
                     <div className="flex justify-end">
-                      <VarMenu tags={varTags} onPick={(tag) => insertTag("plain", tag)} />
+                      <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("plain", tag)} />
                     </div>
                     <textarea
                       ref={plainRef}
@@ -902,7 +953,7 @@ export default function Home() {
                 {(bodyMode === "html" || bodyMode === "both") && (
                   <>
                     <div className="flex justify-end">
-                      <VarMenu tags={varTags} onPick={(tag) => insertTag("html", tag)} />
+                      <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("html", tag)} />
                     </div>
                     <textarea
                       ref={htmlRef}
