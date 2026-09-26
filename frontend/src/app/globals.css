@@ -7,43 +7,74 @@
 }
 
 body {
-  @apply bg-ink-100 text-ink-900 antialiased;
+  @apply bg-ink-100 text-ink-900 antialiased font-sans;
 }
 
 .card {
-  @apply bg-white border border-ink-200 rounded-2xl shadow-[0_1px_3px_rgba(15,23,42,0.06)];
+  @apply bg-white border border-ink-200 rounded-lg;
 }
 
 /* 고정 높이 스크롤 박스: 내용이 길어도 카드 크기는 그대로, 안에서만 스크롤 */
 .scroll-box {
-  @apply overflow-y-auto overflow-x-hidden border border-ink-200 rounded-xl bg-ink-50/40 p-3;
+  @apply overflow-y-auto overflow-x-hidden border border-ink-200 rounded-md bg-ink-50/60 p-3;
 }
 
+/* 섹션 표지: 트래킹 늘린 대문자 라벨 대신, 세리프 소제목 + 짧은 브래스 표식 */
 .card-title {
-  @apply text-[11px] font-semibold uppercase tracking-wider text-ink-500 mb-2;
+  @apply text-[13.5px] font-semibold text-ink-900 mb-2 font-serif flex items-center gap-2;
+}
+.card-title::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 13px;
+  border-radius: 1px;
+  background: #A9762E;
 }
 
 .input {
-  @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm
-    outline-none focus:border-ink-700 focus:ring-2 focus:ring-ink-100 transition;
+  @apply w-full rounded-md border border-ink-200 bg-white px-3 py-2 text-sm
+    outline-none focus:border-brass focus:ring-2 focus:ring-brass/15 transition;
 }
 
 .btn {
-  @apply inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm font-medium
+  @apply inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium
     transition active:scale-[0.98] disabled:opacity-50;
 }
 
 .btn-primary {
-  @apply btn bg-ink-900 text-white hover:bg-ink-700;
+  @apply btn bg-brass text-white hover:bg-brass-600;
 }
 
 .btn-ghost {
   @apply btn bg-ink-100 text-ink-700 hover:bg-ink-200;
 }
 
+/* 어두운 헤더(잉크 그린) 위에서 쓰는 고스트 버튼 */
+.btn-ghost-dark {
+  @apply btn bg-white/10 text-ink-50 hover:bg-white/20;
+}
+
 .chip {
   @apply rounded-full border border-ink-200 bg-white px-2.5 py-1 text-xs text-ink-700
-    hover:border-ink-700 hover:bg-ink-50 transition cursor-pointer;
+    hover:border-brass hover:bg-brass-50/60 transition cursor-pointer;
+}
+
+/* 저장된(★) 템플릿 칩: 이름 + 인라인 삭제 아이콘 */
+.tmpl-chip {
+  @apply inline-flex items-center gap-1.5 rounded-full border px-1 pl-3 py-1 text-xs transition;
+}
+.tmpl-chip[data-active="false"] {
+  @apply border-ink-200 bg-white text-ink-700 hover:border-brass;
+}
+.tmpl-chip[data-active="true"] {
+  @apply border-brass bg-brass-50/70 text-ink-900 font-medium;
+}
+.tmpl-chip-name {
+  @apply bg-transparent p-0 text-inherit;
+}
+.tmpl-chip-del {
+  @apply rounded-full p-1 text-ink-500 hover:bg-ink-200/70 hover:text-red-700 transition;
 }
 
 .seg {

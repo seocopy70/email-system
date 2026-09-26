@@ -6,13 +6,22 @@ const config: Config = {
     extend: {
       colors: {
         ink: {
-          50: "#f8fafc",
-          100: "#f1f5f9",
-          200: "#e2e8f0",
-          500: "#64748b",
-          700: "#334155",
-          900: "#0f172a",
+          50: "#F4F5F1",
+          100: "#E8EBE3",
+          200: "#D8DDD0",
+          500: "#5E6D62",
+          700: "#33453A",
+          900: "#152A22",
         },
+        brass: {
+          DEFAULT: "#A9762E",
+          50: "#F6EEDF",
+          600: "#8C611F",
+        },
+      },
+      fontFamily: {
+        serif: ["var(--font-serif)", "ui-serif", "serif"],
+        sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
     },
   },

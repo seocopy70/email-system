@@ -85,7 +85,7 @@ export default function Home() {
   const [activeTmpl, setActiveTmpl] = useState(NO_TMPL);
   const [showNewTopic, setShowNewTopic] = useState(false);
   const [confirmDelTopic, setConfirmDelTopic] = useState(false);
-  const [confirmDelTmpl, setConfirmDelTmpl] = useState(false);
+  const [delTmplTarget, setDelTmplTarget] = useState<string | null>(null);
   const [topicMsg, setTopicMsg] = useState("");
   const lastEnteredTopic = useRef<number | null>(null);
 
@@ -254,7 +254,7 @@ export default function Home() {
   async function enterTopic(tid: number) {
     if (!user) return;
     setConfirmDelTopic(false);
-    setConfirmDelTmpl(false);
+    setDelTmplTarget(null);
     setShowSave(false);
     setTopicMsg("");
     const list = await api.templates(user.email, tid);
@@ -397,15 +397,15 @@ export default function Home() {
     }
   }
 
-  async function doDeleteTemplate() {
-    if (!user || topicId == null || !activeTmpl.startsWith("★ ")) return;
+  async function doDeleteTemplate(name: string) {
+    if (!user || topicId == null) return;
     try {
-      await api.deleteTemplate(user.email, topicId, activeTmpl.slice(2));
-      setConfirmDelTmpl(false);
+      await api.deleteTemplate(user.email, topicId, name);
+      setDelTmplTarget(null);
       setTemplates(await api.templates(user.email, topicId));
-      clearCompose();
+      if (activeTmpl === `★ ${name}`) clearCompose();
     } catch (e: any) {
-      setConfirmDelTmpl(false);
+      setDelTmplTarget(null);
       alert(e.message || "삭제하지 못했습니다");
     }
   }
@@ -533,25 +533,28 @@ export default function Home() {
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
-        <div className="card w-full max-w-md p-6 space-y-4">
-          <div>
-            <h1 className="text-lg font-semibold">기업 이메일 발송 시스템</h1>
+        <div className="w-full max-w-md">
+          <div className="mb-5 text-center">
+            <div className="inline-block h-[3px] w-10 bg-brass rounded-full mb-3" />
+            <h1 className="font-serif text-xl font-semibold text-ink-900">기업 이메일 발송 시스템</h1>
             <p className="text-sm text-ink-500 mt-1">등록된 Gmail + 앱 비밀번호로 로그인</p>
           </div>
-          <input className="input" placeholder="Gmail" autoComplete="username" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
-          <input
-            className="input"
-            type="password"
-            placeholder="앱 비밀번호"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <input className="input" placeholder="표시 이름 (선택)" autoComplete="off" value={loginName} onChange={(e) => setLoginName(e.target.value)} />
-          {loginErr && <p className="text-sm text-red-600">{loginErr}</p>}
-          <button className="btn-primary w-full" disabled={busy} onClick={doLogin}>
-            {busy ? "확인 중…" : "로그인"}
-          </button>
+          <div className="card p-6 space-y-3">
+            <input className="input" placeholder="Gmail" autoComplete="username" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
+            <input
+              className="input"
+              type="password"
+              placeholder="앱 비밀번호"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <input className="input" placeholder="표시 이름 (선택)" autoComplete="off" value={loginName} onChange={(e) => setLoginName(e.target.value)} />
+            {loginErr && <p className="text-sm text-red-600">{loginErr}</p>}
+            <button className="btn-primary w-full" disabled={busy} onClick={doLogin}>
+              {busy ? "확인 중…" : "로그인"}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -562,20 +565,20 @@ export default function Home() {
 
   return (
     <div className="min-h-screen pb-10">
-      <header className="bg-white border-b border-ink-200 shadow-sm px-5 py-3.5">
+      <header className="bg-ink-900 border-b-2 border-brass px-5 py-3.5">
         <div className="max-w-[1400px] mx-auto flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-base font-semibold text-ink-900">기업 이메일 발송 시스템</h1>
-            <p className="text-xs text-ink-500">맞춤 메일 · 중복 발송 방지 · 다중 계정</p>
+            <h1 className="font-serif text-base font-semibold text-ink-50 tracking-tight">기업 이메일 발송 시스템</h1>
+            <p className="text-xs text-ink-50/60">맞춤 메일 · 중복 발송 방지 · 다중 계정</p>
           </div>
           <div className="flex items-center gap-4 text-sm">
             <div className="text-right">
-              <div className="font-medium">{user.name}</div>
-              <div className="text-ink-500 text-xs">
+              <div className="font-medium text-ink-50">{user.name}</div>
+              <div className="text-ink-50/60 text-xs">
                 {user.email} · 오늘 {user.sent_today}/{user.daily_limit}
               </div>
             </div>
-            <button className="btn-ghost" onClick={logout}>
+            <button className="btn-ghost-dark" onClick={logout}>
               로그아웃
             </button>
           </div>
@@ -677,14 +680,13 @@ export default function Home() {
             <div className="flex gap-2">
               <select
                 className="input"
-                aria-label="템플릿 선택"
-                value={activeTmpl}
+                aria-label="기본 서식 선택"
+                value={presetNames.includes(activeTmpl) ? activeTmpl : NO_TMPL}
                 disabled={topicId == null}
                 onChange={(e) => {
                   const v = e.target.value;
-                  setConfirmDelTmpl(false);
+                  setDelTmplTarget(null);
                   if (v === NO_TMPL) clearCompose();
-                  else if (v.startsWith("★ ")) applyUserTemplate(v.slice(2)).catch(console.error);
                   else applyPreset(v);
                 }}
               >
@@ -692,11 +694,6 @@ export default function Home() {
                 {presetNames.map((n) => (
                   <option key={n} value={n}>
                     {n}
-                  </option>
-                ))}
-                {userTmplNames.map((n) => (
-                  <option key={n} value={`★ ${n}`}>
-                    ★ {n}
                   </option>
                 ))}
               </select>
@@ -708,26 +705,34 @@ export default function Home() {
                 disabled={topicId == null}
                 onClick={() => {
                   setShowSave((v) => !v);
-                  setConfirmDelTmpl(false);
+                  setDelTmplTarget(null);
                 }}
               >
                 <PlusIcon />
               </button>
-              {activeTmpl.startsWith("★ ") && (
-                <button
-                  type="button"
-                  className="btn-ghost !px-2.5"
-                  title="이 템플릿 삭제"
-                  aria-label="이 템플릿 삭제"
-                  onClick={() => {
-                    setConfirmDelTmpl(true);
-                    setShowSave(false);
-                  }}
-                >
-                  <TrashIcon />
-                </button>
-              )}
             </div>
+
+            {userTmplNames.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {userTmplNames.map((n) => (
+                  <span key={n} className="tmpl-chip" data-active={activeTmpl === `★ ${n}`}>
+                    <button type="button" className="tmpl-chip-name" onClick={() => applyUserTemplate(n).catch(console.error)}>
+                      ★ {n}
+                    </button>
+                    <button
+                      type="button"
+                      className="tmpl-chip-del"
+                      title="이 템플릿 삭제"
+                      aria-label={`${n} 템플릿 삭제`}
+                      onClick={() => setDelTmplTarget(n)}
+                    >
+                      <TrashIcon />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
             {showSave && (
               <div className="flex gap-2">
                 <input
@@ -753,13 +758,13 @@ export default function Home() {
                 </button>
               </div>
             )}
-            {confirmDelTmpl && activeTmpl.startsWith("★ ") && (
+            {delTmplTarget && (
               <div className="flex flex-wrap items-center gap-2 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                <span className="flex-1">「{activeTmpl.slice(2)}」 템플릿을 삭제할까요? 되돌릴 수 없습니다.</span>
-                <button type="button" className="btn-primary" onClick={doDeleteTemplate}>
+                <span className="flex-1">「{delTmplTarget}」 템플릿을 삭제할까요? 되돌릴 수 없습니다.</span>
+                <button type="button" className="btn-primary" onClick={() => doDeleteTemplate(delTmplTarget)}>
                   삭제
                 </button>
-                <button type="button" className="btn-ghost" onClick={() => setConfirmDelTmpl(false)}>
+                <button type="button" className="btn-ghost" onClick={() => setDelTmplTarget(null)}>
                   취소
                 </button>
               </div>
@@ -778,7 +783,9 @@ export default function Home() {
               {(["body", "footer", "form"] as const).map((tab) => (
                 <button
                   key={tab}
-                  className={`px-3 py-2 text-sm ${activeTab === tab ? "border-b-2 border-ink-900 font-medium" : "text-ink-500"}`}
+                  className={`px-3 py-2 text-sm transition ${
+                    activeTab === tab ? "border-b-2 border-brass text-ink-900 font-medium" : "text-ink-500 hover:text-ink-700"
+                  }`}
                   onClick={() => setActiveTab(tab)}
                 >
                   {tab === "body" ? "본문" : tab === "footer" ? "푸터" : "설문지"}
@@ -957,7 +964,9 @@ export default function Home() {
             ).map(([k, label]) => (
               <button
                 key={k}
-                className={`px-3 py-2 text-sm ${bottomTab === k ? "border-b-2 border-ink-900 font-medium" : "text-ink-500"}`}
+                className={`px-3 py-2 text-sm transition ${
+                  bottomTab === k ? "border-b-2 border-brass text-ink-900 font-medium" : "text-ink-500 hover:text-ink-700"
+                }`}
                 onClick={() => setBottomTab(k as BottomTab)}
               >
                 {label}
