@@ -238,8 +238,14 @@ def build_email_html(
         )
 
     full = f"""
-<html><body style="font-family:'Malgun Gothic',Arial,sans-serif;line-height:1.7;color:#222;font-size:14px;">
-<div style="max-width:650px;margin:0 auto;padding:20px;border:1px solid #eee;border-radius:6px;">
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="format-detection" content="telephone=no">
+</head>
+<body style="margin:0;padding:0;width:100%;font-family:'Malgun Gothic',Arial,sans-serif;line-height:1.7;color:#222;font-size:14px;-webkit-text-size-adjust:100%;">
+<div style="max-width:650px;width:100%;box-sizing:border-box;margin:0 auto;padding:20px;border:1px solid #eee;border-radius:6px;">
 {chr(10).join(sections)}
 {extra_img}
 {form_block}

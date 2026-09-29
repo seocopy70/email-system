@@ -30,6 +30,31 @@ const TrashIcon = () => (
   </svg>
 );
 
+function AlignPicker({
+  value,
+  onChange,
+}: {
+  value: "왼쪽" | "가운데" | "오른쪽";
+  onChange: (v: "왼쪽" | "가운데" | "오른쪽") => void;
+}) {
+  return (
+    <div className="flex gap-1">
+      {(["왼쪽", "가운데", "오른쪽"] as const).map((a) => (
+        <button
+          key={a}
+          type="button"
+          className={`rounded-md border px-2 py-1 text-xs transition ${
+            value === a ? "border-brass bg-brass-50/60 text-ink-900 font-medium" : "border-ink-200 text-ink-500 hover:text-ink-700"
+          }`}
+          onClick={() => onChange(a)}
+        >
+          {a}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 const ChevronDownIcon = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M6 9l6 6 6-6" />
@@ -131,7 +156,12 @@ export default function Home() {
   const [footerImageB64, setFooterImageB64] = useState<string | null>(null);
   const [imageWidth, setImageWidth] = useState(80);
   const [footerImageWidth, setFooterImageWidth] = useState(60);
+  const [imageAlign, setImageAlign] = useState<"왼쪽" | "가운데" | "오른쪽">("가운데");
+  const [footerImageAlign, setFooterImageAlign] = useState<"왼쪽" | "가운데" | "오른쪽">("가운데");
   const [useBodyImage, setUseBodyImage] = useState(false);
+  const [attachments, setAttachments] = useState<
+    { filename: string; content_b64: string; content_type: string; size: number }[]
+  >([]);
 
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewSubj, setPreviewSubj] = useState("");
@@ -198,6 +228,8 @@ export default function Home() {
           if (p.use_footer_image) setFooterMode("image");
         }
         if (p.footer_image_width) setFooterImageWidth(Number(p.footer_image_width) || 60);
+        if (p.footer_image_align === "왼쪽" || p.footer_image_align === "가운데" || p.footer_image_align === "오른쪽")
+          setFooterImageAlign(p.footer_image_align);
         if (p.body_mode === "html" || p.body_mode === "text" || p.body_mode === "both") setBodyMode(p.body_mode);
       })
       .catch(() => {});
@@ -223,7 +255,9 @@ export default function Home() {
           body_image_b64: useBodyImage ? bodyImageB64 : null,
           footer_image_b64: footerMode === "image" ? footerImageB64 : null,
           image_width_pct: imageWidth,
+          image_align: imageAlign,
           footer_image_width_pct: footerImageWidth,
+          footer_image_align: footerImageAlign,
           row: SAMPLE,
         })
         .then((r) => {
@@ -249,6 +283,8 @@ export default function Home() {
     useBodyImage,
     imageWidth,
     footerImageWidth,
+    imageAlign,
+    footerImageAlign,
   ]);
 
   useEffect(() => {
@@ -413,6 +449,36 @@ export default function Home() {
     setFooterImageB64(await fileToBase64(file));
   }
 
+  const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+  const MAX_ATTACHMENTS_TOTAL_BYTES = 15 * 1024 * 1024;
+
+  async function onAttachFiles(files: FileList | null) {
+    if (!files || !files.length) return;
+    const next = [...attachments];
+    for (const file of Array.from(files)) {
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        alert(`'${file.name}'이(가) 너무 큽니다. 파일당 최대 ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB까지 첨부할 수 있어요.`);
+        continue;
+      }
+      const totalSoFar = next.reduce((s, a) => s + a.size, 0);
+      if (totalSoFar + file.size > MAX_ATTACHMENTS_TOTAL_BYTES) {
+        alert(`첨부파일 총 용량이 ${MAX_ATTACHMENTS_TOTAL_BYTES / (1024 * 1024)}MB를 넘어서 '${file.name}'은(는) 추가하지 못했어요.`);
+        continue;
+      }
+      next.push({
+        filename: file.name,
+        content_b64: await fileToBase64(file),
+        content_type: file.type || "application/octet-stream",
+        size: file.size,
+      });
+    }
+    setAttachments(next);
+  }
+
+  function removeAttachment(index: number) {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  }
+
   async function saveMyPrefs() {
     if (!user) return;
     await api.savePrefs(user.email, {
@@ -420,6 +486,7 @@ export default function Home() {
       footer_text: footerText,
       footer_image_b64: footerImageB64,
       footer_image_width: footerImageWidth,
+      footer_image_align: footerImageAlign,
       use_footer_image: footerMode === "image",
       body_mode: bodyMode,
     });
@@ -560,6 +627,18 @@ export default function Home() {
       alert("발송 대상이 없습니다");
       return;
     }
+    // 이미 발송 완료된 주소를 다시 선택해서 보내려는 경우, 한 번 더 확인
+    const alreadySentCount = targets.filter((t) => {
+      const log = statusMap[String(t.recipient_id)] || statusMap[t.recipient_id];
+      return log?.status === "sent";
+    }).length;
+    if (alreadySentCount > 0) {
+      const ok = window.confirm(
+        `선택한 ${targets.length}건 중 ${alreadySentCount}건은 이 주제로 이미 발송 완료된 주소입니다.\n` +
+          "그래도 다시 보낼까요? 같은 사람에게 메일이 한 번 더 갑니다."
+      );
+      if (!ok) return;
+    }
     // 눌렀을 때 바로 확인: 제목/본문이 비어 있으면 보내지 않는다
     const needText = bodyMode === "text" || bodyMode === "both";
     const needHtml = bodyMode === "html" || bodyMode === "both";
@@ -608,7 +687,14 @@ export default function Home() {
         body_image_b64: useBodyImage ? bodyImageB64 : null,
         footer_image_b64: footerMode === "image" ? footerImageB64 : null,
         image_width_pct: imageWidth,
+        image_align: imageAlign,
         footer_image_width_pct: footerImageWidth,
+        footer_image_align: footerImageAlign,
+        attachments: attachments.map((a) => ({
+          filename: a.filename,
+          content_b64: a.content_b64,
+          content_type: a.content_type,
+        })),
         targets,
         delay_sec: 2,
         allow_over_limit: allowOver,
@@ -793,7 +879,12 @@ export default function Home() {
           <div className="card p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="card-title mb-0">메일 작성</div>
-              <button type="button" className="text-xs text-ink-500 hover:text-ink-900" onClick={saveMyPrefs}>
+              <button
+                type="button"
+                className="text-xs text-ink-500 hover:text-ink-900 underline decoration-dotted underline-offset-2"
+                title="지금 화면의 '푸터'와 '본문 형식(HTML/텍스트/HTML+텍스트)'을 내 계정 기본값으로 저장합니다. 제목·본문 내용·변수는 저장되지 않으며(그건 템플릿 기능을 쓰세요), 다음에 로그인하면 이 푸터와 본문 형식이 자동으로 채워집니다."
+                onClick={saveMyPrefs}
+              >
                 내 기본설정 저장
               </button>
             </div>
@@ -893,17 +984,19 @@ export default function Home() {
               </div>
             )}
 
-            <div className="flex justify-end">
-              <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("subject", tag)} />
+            <div className="space-y-1">
+              <div className="flex justify-end">
+                <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("subject", tag)} />
+              </div>
+              <input
+                ref={subjectRef}
+                className="input"
+                aria-label="제목"
+                placeholder={ex.subject || "제목"}
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+              />
             </div>
-            <input
-              ref={subjectRef}
-              className="input"
-              aria-label="제목"
-              placeholder={ex.subject || "제목"}
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-            />
 
             <div className="doc-tabs">
               {(["body", "footer", "form"] as const).map((tab) => (
@@ -936,7 +1029,7 @@ export default function Home() {
                   ))}
                 </div>
                 {(bodyMode === "text" || bodyMode === "both") && (
-                  <>
+                  <div className="space-y-1">
                     <div className="flex justify-end">
                       <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("plain", tag)} />
                     </div>
@@ -948,10 +1041,10 @@ export default function Home() {
                       value={plainBody}
                       onChange={(e) => setPlainBody(e.target.value)}
                     />
-                  </>
+                  </div>
                 )}
                 {(bodyMode === "html" || bodyMode === "both") && (
-                  <>
+                  <div className="space-y-1">
                     <div className="flex justify-end">
                       <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("html", tag)} />
                     </div>
@@ -963,7 +1056,7 @@ export default function Home() {
                       value={htmlBody}
                       onChange={(e) => setHtmlBody(e.target.value)}
                     />
-                  </>
+                  </div>
                 )}
                 <label className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={useBodyImage} onChange={(e) => setUseBodyImage(e.target.checked)} />
@@ -986,6 +1079,10 @@ export default function Home() {
                         onChange={(e) => setImageWidth(Number(e.target.value))}
                       />
                       <span>{imageWidth}%</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-ink-500">위치</span>
+                      <AlignPicker value={imageAlign} onChange={setImageAlign} />
                     </div>
                     {bodyImageB64 && (
                       <img src={`data:image/png;base64,${bodyImageB64}`} alt="body" className="max-h-32 rounded border border-ink-200" />
@@ -1034,6 +1131,10 @@ export default function Home() {
                       />
                       <span>{footerImageWidth}%</span>
                     </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-ink-500">위치</span>
+                      <AlignPicker value={footerImageAlign} onChange={setFooterImageAlign} />
+                    </div>
                     {footerImageB64 && (
                       <img
                         src={`data:image/png;base64,${footerImageB64}`}
@@ -1067,15 +1168,51 @@ export default function Home() {
               </div>
             )}
             </div>
+
+            <div className="space-y-2 pt-2 border-t border-ink-200">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-ink-900">파일 첨부</span>
+                {attachments.length > 0 && (
+                  <span className="text-xs text-ink-500">
+                    {attachments.length}개 · {(attachments.reduce((s, a) => s + a.size, 0) / (1024 * 1024)).toFixed(1)}MB
+                  </span>
+                )}
+              </div>
+              <input type="file" multiple onChange={(e) => onAttachFiles(e.target.files)} />
+              {attachments.length > 0 && (
+                <ul className="space-y-1">
+                  {attachments.map((a, i) => (
+                    <li
+                      key={`${a.filename}-${i}`}
+                      className="flex items-center justify-between gap-2 text-xs bg-ink-50 border border-ink-200 rounded px-2 py-1"
+                    >
+                      <span className="truncate">
+                        {a.filename} · {(a.size / 1024).toFixed(0)}KB
+                      </span>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded p-1 text-ink-500 hover:bg-ink-200/70 hover:text-red-700 transition"
+                        title="첨부 제거"
+                        aria-label={`${a.filename} 첨부 제거`}
+                        onClick={() => removeAttachment(i)}
+                      >
+                        <TrashIcon />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-ink-500">모든 수신자에게 동일하게 첨부됩니다 · 파일당 최대 10MB, 총 15MB</p>
+            </div>
           </div>
         </section>
 
-        <section className="card p-4 lg:sticky lg:top-4 lg:self-start h-fit lg:max-h-[calc(100vh-2rem)] overflow-y-auto space-y-2">
-          <div className="card-title">실시간 미리보기</div>
-          <div className="text-xs text-ink-500 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2">
+        <section className="card p-4 space-y-2 lg:flex lg:flex-col">
+          <div className="card-title shrink-0">실시간 미리보기</div>
+          <div className="text-xs text-ink-500 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2 shrink-0">
             <b>제목</b> {previewSubj || "—"}
           </div>
-          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden h-[60vh] min-h-[360px] max-h-[640px]">
+          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden h-[60vh] min-h-[360px] lg:h-auto lg:flex-1">
             <iframe
               title="preview"
               className="w-full h-full bg-white"
@@ -1112,6 +1249,26 @@ export default function Home() {
               <input type="file" accept=".xlsx,.xls" onChange={(e) => e.target.files?.[0] && onExcel(e.target.files[0])} />
               {recipients.length > 0 && (
                 <>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <button
+                      type="button"
+                      className="btn-ghost !py-1 !px-2.5"
+                      onClick={() => setSelected(new Set(recipients.map((r) => String(r.recipient_id))))}
+                    >
+                      전체 선택
+                    </button>
+                    <button type="button" className="btn-ghost !py-1 !px-2.5" onClick={() => setSelected(new Set())}>
+                      전체 해제
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost !py-1 !px-2.5"
+                      onClick={() => setSelected(pickSelectable(recipients, statusMap))}
+                    >
+                      미발송만 선택
+                    </button>
+                    <span className="text-ink-500">선택 {selected.size} / 전체 {recipients.length}</span>
+                  </div>
                   <div className="scroll-box h-64">
                     <table className="w-full text-sm">
                       <thead className="bg-ink-50 sticky top-0">
@@ -1128,8 +1285,24 @@ export default function Home() {
                           const st = log?.status || "none";
                           const label =
                             st === "sent" ? "발송완료" : st === "failed" ? "실패" : st === "pending" ? "발송중" : "미발송";
+                          const rowBg =
+                            st === "sent"
+                              ? "bg-emerald-50/60"
+                              : st === "failed"
+                                ? "bg-red-50/60"
+                                : st === "pending"
+                                  ? "bg-amber-50/60"
+                                  : "";
+                          const badge =
+                            st === "sent"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : st === "failed"
+                                ? "bg-red-100 text-red-800"
+                                : st === "pending"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-ink-100 text-ink-500";
                           return (
-                            <tr key={r.recipient_id} className="border-t border-ink-100">
+                            <tr key={r.recipient_id} className={`border-t border-ink-100 ${rowBg}`}>
                               <td className="p-2">
                                 <input
                                   type="checkbox"
@@ -1144,7 +1317,9 @@ export default function Home() {
                               </td>
                               <td className="p-2">{r.회사명}</td>
                               <td className="p-2">{r.이메일}</td>
-                              <td className="p-2 text-ink-500">{label}</td>
+                              <td className="p-2">
+                                <span className={`rounded-full px-2 py-0.5 text-xs ${badge}`}>{label}</span>
+                              </td>
                             </tr>
                           );
                         })}

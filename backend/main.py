@@ -8,13 +8,16 @@
 from __future__ import annotations
 
 import base64
+import mimetypes
 import os
 import re
 import smtplib
 import socket
 import ssl
 import time
+from email import encoders as email_encoders
 from email.header import Header
+from email.mime.base import MIMEBase
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -39,6 +42,8 @@ from mail_builder import (
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GMAIL_DAILY_LIMIT = 500
 MAX_IMAGE_BYTES = 6 * 1024 * 1024
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024        # 첨부파일 1개당 최대
+MAX_ATTACHMENTS_TOTAL_BYTES = 15 * 1024 * 1024  # 첨부파일 합계 최대 (base64 인코딩 후에도 Gmail 25MB 한도 안에 들도록 여유를 둠)
 
 app = FastAPI(title="Email System API", version="1.1.0")
 
@@ -101,6 +106,12 @@ class PreviewBody(BaseModel):
     })
 
 
+class AttachmentItem(BaseModel):
+    filename: str
+    content_b64: str
+    content_type: str = ""
+
+
 class RecipientItem(BaseModel):
     회사명: str = ""
     대표자명: str = ""
@@ -144,6 +155,7 @@ class SendBody(BaseModel):
     footer_image_b64: Optional[str] = None
     delay_sec: float = 3
     allow_over_limit: bool = False  # Gmail 일일 한도(500건) 초과를 알고도 진행
+    attachments: list[AttachmentItem] = Field(default_factory=list, max_length=10)
     targets: list[SendItem] = Field(max_length=2000)
 
 
@@ -280,6 +292,21 @@ def decode_image(b64: Optional[str]) -> Optional[bytes]:
     return data
 
 
+def decode_file(b64: Optional[str], label: str) -> Optional[bytes]:
+    if not b64:
+        return None
+    s = b64.strip()
+    if s.startswith("data:"):
+        s = s.split(",", 1)[-1]
+    try:
+        data = base64.b64decode(s)
+    except Exception:
+        raise HTTPException(400, f"첨부파일 '{label}'을(를) 읽을 수 없습니다")
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(413, f"첨부파일 '{label}'이(가) 너무 큽니다 (파일당 최대 {MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB)")
+    return data
+
+
 def to_data_uri(data: Optional[bytes]) -> Optional[str]:
     if not data:
         return None
@@ -291,11 +318,9 @@ def _clean_name(name: str) -> str:
 
 
 def build_mime(sender_name: str, sender_email: str, to_addr: str, subject: str,
-               html: str, images: list, plain: Optional[str] = None) -> MIMEMultipart:
+               html: str, images: list, plain: Optional[str] = None,
+               attachments: Optional[list] = None) -> MIMEMultipart:
     msg = MIMEMultipart("related")
-    msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = formataddr((sender_name, sender_email)) if sender_name else sender_email
-    msg["To"] = to_addr
     alt = MIMEMultipart("alternative")
     msg.attach(alt)
     # multipart/alternative: text/plain 을 먼저, HTML 을 나중에 (메일 앱은 마지막 파트를 우선 표시)
@@ -307,6 +332,22 @@ def build_mime(sender_name: str, sender_email: str, to_addr: str, subject: str,
         part.add_header("Content-ID", f"<{cid}>")
         part.add_header("Content-Disposition", "inline", filename=f"{cid}.{subtype}")
         msg.attach(part)
+
+    if attachments:
+        outer = MIMEMultipart("mixed")
+        outer.attach(msg)
+        for filename, data, content_type in attachments:
+            maintype, _, subtype = (content_type or "application/octet-stream").partition("/")
+            part = MIMEBase(maintype or "application", subtype or "octet-stream")
+            part.set_payload(data)
+            email_encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            outer.attach(part)
+        msg = outer
+
+    msg["Subject"] = Header(subject, "utf-8")
+    msg["From"] = formataddr((sender_name, sender_email)) if sender_name else sender_email
+    msg["To"] = to_addr
     return msg
 
 
@@ -569,6 +610,22 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
     footer_src = "cid:footer_image" if footer_bytes else None
     footer_text = body.footer_text if body.footer_mode in ("text", "image") else ""
 
+    attachment_files: list[tuple[str, bytes, str]] = []
+    total_attach_bytes = 0
+    for a in body.attachments:
+        filename = _clean_name(a.filename) or "첨부파일"
+        data = decode_file(a.content_b64, filename)
+        if not data:
+            continue
+        total_attach_bytes += len(data)
+        if total_attach_bytes > MAX_ATTACHMENTS_TOTAL_BYTES:
+            raise HTTPException(
+                413,
+                f"첨부파일 총 용량이 {MAX_ATTACHMENTS_TOTAL_BYTES // (1024 * 1024)}MB를 넘습니다. 줄여서 다시 시도해 주세요.",
+            )
+        content_type = a.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        attachment_files.append((filename, data, content_type))
+
     try:
         server = smtp_connect(sender_email, body.sender_password)
     except smtplib.SMTPAuthenticationError:
@@ -627,7 +684,7 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
                     row, body.plain_body, footer_text, sender_name,
                     form_url=body.form_url, include_form=body.include_form,
                 )
-            msg = build_mime(sender_name, sender_email, to_addr, subj, html, images, plain_part)
+            msg = build_mime(sender_name, sender_email, to_addr, subj, html, images, plain_part, attachment_files)
             try:
                 server.sendmail(sender_email, to_addr, msg.as_string())
             except smtplib.SMTPServerDisconnected:
