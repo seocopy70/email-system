@@ -791,7 +791,7 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="max-w-[1400px] mx-auto p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <main className="max-w-[1400px] mx-auto p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
         <section className="space-y-3">
           <div className="card p-4 space-y-2">
             <div className="card-title">발송 주제</div>
@@ -1207,12 +1207,12 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="card p-4 space-y-2 lg:flex lg:flex-col">
+        <section className="card p-4 space-y-2 md:flex md:flex-col">
           <div className="card-title shrink-0">실시간 미리보기</div>
           <div className="text-xs text-ink-500 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2 shrink-0">
             <b>제목</b> {previewSubj || "—"}
           </div>
-          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden h-[60vh] min-h-[360px] lg:h-auto lg:flex-1">
+          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden h-[60vh] min-h-[360px] md:h-auto md:flex-1">
             <iframe
               title="preview"
               className="w-full h-full bg-white"
@@ -1222,7 +1222,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="lg:col-span-2">
+        <section className="md:col-span-2">
           <div className="doc-tabs">
             {(
               [
