@@ -231,6 +231,7 @@ export default function Home() {
   const [imageAlign, setImageAlign] = useState<"왼쪽" | "가운데" | "오른쪽">("가운데");
   const [footerImageAlign, setFooterImageAlign] = useState<"왼쪽" | "가운데" | "오른쪽">("가운데");
   const [useBodyImage, setUseBodyImage] = useState(false);
+  const [showBodyImageOptions, setShowBodyImageOptions] = useState(false);
   const [attachments, setAttachments] = useState<
     { filename: string; content_b64: string; content_type: string; size: number }[]
   >([]);
@@ -1226,7 +1227,7 @@ export default function Home() {
               )}
             </div>
 
-            <div>
+            <div className={activeTab === "body" ? "min-h-[445px]" : ""}>
             {activeTab === "body" && (
               <div className="space-y-2">
                 {bodyMode === "text" && (
@@ -1253,31 +1254,58 @@ export default function Home() {
                   </div>
                 )}
                 <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={useBodyImage} onChange={(e) => setUseBodyImage(e.target.checked)} />
+                  <input
+                    type="checkbox"
+                    checked={useBodyImage}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setUseBodyImage(checked);
+                      setShowBodyImageOptions(checked);
+                    }}
+                  />
                   본문에 이미지 추가
                 </label>
-                {useBodyImage && (
-                  <div className="space-y-2 pl-1">
-                    <input type="file" accept="image/*" onChange={(e) => onBodyImage(e.target.files?.[0] || null)} />
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="text-ink-500">너비</span>
-                      <input
-                        type="range"
-                        min={20}
-                        max={100}
-                        step={5}
-                        value={imageWidth}
-                        onChange={(e) => setImageWidth(Number(e.target.value))}
-                      />
-                      <span>{imageWidth}%</span>
+                {showBodyImageOptions && (
+                  <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
+                    onMouseDown={(e) => {
+                      if (e.target === e.currentTarget) setShowBodyImageOptions(false);
+                    }}
+                  >
+                    <div
+                      className="w-full max-w-md rounded-xl bg-white shadow-xl border border-ink-200 p-4 space-y-3"
+                      role="dialog"
+                      aria-modal="true"
+                      aria-label="본문 이미지 설정"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="font-medium text-ink-900">본문 이미지 설정</div>
+                        <button type="button" className="btn-ghost !px-2 !py-1 text-sm" onClick={() => setShowBodyImageOptions(false)}>닫기</button>
+                      </div>
+                      <label className="btn-ghost inline-flex cursor-pointer items-center gap-2">
+                        이미지 선택
+                        <input type="file" accept="image/*" className="hidden" onChange={(e) => onBodyImage(e.target.files?.[0] || null)} />
+                      </label>
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="text-ink-500">너비</span>
+                        <input
+                          type="range"
+                          min={20}
+                          max={100}
+                          step={5}
+                          value={imageWidth}
+                          onChange={(e) => setImageWidth(Number(e.target.value))}
+                        />
+                        <span>{imageWidth}%</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="text-ink-500">위치</span>
+                        <AlignPicker value={imageAlign} onChange={setImageAlign} />
+                      </div>
+                      {bodyImageB64 && (
+                        <img src={`data:image/png;base64,${bodyImageB64}`} alt="body" className="max-h-32 rounded border border-ink-200" />
+                      )}
                     </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="text-ink-500">위치</span>
-                      <AlignPicker value={imageAlign} onChange={setImageAlign} />
-                    </div>
-                    {bodyImageB64 && (
-                      <img src={`data:image/png;base64,${bodyImageB64}`} alt="body" className="max-h-32 rounded border border-ink-200" />
-                    )}
                   </div>
                 )}
               </div>
