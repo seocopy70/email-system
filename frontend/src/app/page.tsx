@@ -448,7 +448,7 @@ export default function Home() {
     setSubject(p.subject || "");
     setPlainBody(p.plain_body || "");
     setHtmlBody(p.html_body || "");
-    setBodyMode((p.body_mode as BodyMode) || "html");
+    setBodyMode(p.body_mode === "text" ? "text" : "html");
     setActiveTmpl(name);
   }
 
@@ -466,7 +466,7 @@ export default function Home() {
     setSubject(t.subject || "");
     setPlainBody(t.plain_body || "");
     setHtmlBody(t.html_body || "");
-    setBodyMode((t.body_mode as BodyMode) || "html");
+    setBodyMode(t.body_mode === "text" ? "text" : "html");
     setActiveTmpl(`★ ${name}`);
   }
 
@@ -1235,10 +1235,10 @@ export default function Home() {
               )}
             </div>
 
-            <div className="h-[390px] overflow-visible">
+            <div>
             {activeTab === "body" && (
               <div className="space-y-2">
-                {(bodyMode === "text" || bodyMode === "both") && (
+                {bodyMode === "text" && (
                   <div className="space-y-1">
                     <RichTextEditor
                       value={plainBody}
@@ -1250,7 +1250,7 @@ export default function Home() {
                     />
                   </div>
                 )}
-                {(bodyMode === "html" || bodyMode === "both") && (
+                {bodyMode === "html" && (
                   <div className="space-y-1">
                     <RichTextEditor
                       value={htmlBody}
