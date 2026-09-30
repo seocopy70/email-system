@@ -135,11 +135,13 @@ function RichTextEditor({
   onChange,
   placeholder,
   editorRef,
+  ariaLabel = "서식 입력창",
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   editorRef: React.RefObject<HTMLDivElement | null>;
+  ariaLabel?: string;
 }) {
   const lastExternalValue = useRef(value);
 
@@ -180,7 +182,7 @@ function RichTextEditor({
         contentEditable
         suppressContentEditableWarning
         role="textbox"
-        aria-label="HTML 본문"
+        aria-label={ariaLabel}
         data-placeholder={placeholder || ""}
         className="input min-h-[180px] overflow-auto text-sm leading-6 whitespace-pre-wrap focus:outline-none"
         onInput={(e) => {
@@ -260,6 +262,8 @@ export default function Home() {
   const plainRef = useRef<HTMLTextAreaElement>(null);
   const htmlRef = useRef<HTMLTextAreaElement>(null);
   const htmlEditorRef = useRef<HTMLDivElement>(null);
+  const plainEditorRef = useRef<HTMLDivElement>(null);
+  const footerEditorRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLTextAreaElement>(null);
 
   const [bottomTab, setBottomTab] = useState<BottomTab>("list");
@@ -530,10 +534,31 @@ export default function Home() {
         el.setSelectionRange(pos, pos);
       });
     }
+    function applyAtEditor(el: HTMLDivElement | null, setValue: (v: string) => void) {
+      if (!el) {
+        setValue(tag);
+        return;
+      }
+      el.focus();
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount || !el.contains(sel.anchorNode)) {
+        el.appendChild(document.createTextNode(tag));
+      } else {
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        const node = document.createTextNode(tag);
+        range.insertNode(node);
+        range.setStartAfter(node);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+      setValue(el.innerHTML);
+    }
     if (field === "subject") applyAt(subjectRef.current, subject, setSubject);
-    if (field === "plain") applyAt(plainRef.current, plainBody, setPlainBody);
-    if (field === "html") applyAt(htmlRef.current, htmlBody, setHtmlBody);
-    if (field === "footer") applyAt(footerRef.current, footerText, setFooterText);
+    if (field === "plain") applyAtEditor(plainEditorRef.current, setPlainBody);
+    if (field === "html") applyAtEditor(htmlEditorRef.current, setHtmlBody);
+    if (field === "footer") applyAtEditor(footerEditorRef.current, setFooterText);
   }
 
   async function onBodyImage(file: File | null) {
@@ -1212,13 +1237,12 @@ export default function Home() {
                     <div className="flex justify-end">
                       <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("plain", tag)} />
                     </div>
-                    <textarea
-                      ref={plainRef}
-                      className="input min-h-[120px] font-mono text-xs"
-                      aria-label="텍스트 본문"
-                      placeholder={ex.plain_body}
+                    <RichTextEditor
                       value={plainBody}
-                      onChange={(e) => setPlainBody(e.target.value)}
+                      onChange={setPlainBody}
+                      placeholder={ex.plain_body}
+                      editorRef={plainEditorRef}
+                      ariaLabel="텍스트 본문"
                     />
                   </div>
                 )}
@@ -1285,12 +1309,12 @@ export default function Home() {
                   ))}
                 </div>
                 {footerMode !== "none" && (
-                  <textarea
-                    ref={footerRef}
-                    className="input min-h-[72px]"
+                  <RichTextEditor
                     value={footerText}
-                    onChange={(e) => setFooterText(e.target.value)}
+                    onChange={setFooterText}
                     placeholder="푸터 문구"
+                    editorRef={footerEditorRef}
+                    ariaLabel="푸터 문구"
                   />
                 )}
                 {footerMode === "image" && (
