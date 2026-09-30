@@ -161,6 +161,7 @@ _SCHEMA = [
         name           TEXT NOT NULL UNIQUE,
         created_by     TEXT,
         default_preset TEXT,
+        deleted_at     TEXT,
         created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     )""",
     """CREATE TABLE IF NOT EXISTS recipients (
@@ -200,6 +201,14 @@ _SCHEMA = [
         use_footer_image   INTEGER DEFAULT 0,
         updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     )""",
+    """CREATE TABLE IF NOT EXISTS saved_mail_settings (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_email TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        data_json   TEXT NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )""",
     """CREATE TABLE IF NOT EXISTS mail_templates (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         owner_email  TEXT NOT NULL,
@@ -222,6 +231,7 @@ _SCHEMA = [
 # 기존 DB에 컬럼이 없을 때 추가 (이미 있으면 무시)
 _MIGRATIONS = [
     "ALTER TABLE topics ADD COLUMN default_preset TEXT",
+    "ALTER TABLE topics ADD COLUMN deleted_at TEXT",
 ]
 
 _MAIL_TEMPLATES_RECREATE_SQL = (
@@ -320,14 +330,29 @@ def upsert_sender(email: str, display_name: str, is_admin: bool, is_active: bool
 
 # ---------------------------------------------------------------- 주제
 def list_topics() -> list:
-    return _rows("SELECT id, name, default_preset, created_at FROM topics ORDER BY created_at DESC, id DESC")
+    return _rows("SELECT id, name, default_preset, created_at FROM topics WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC")
 
 
 def create_topic(name: str, created_by: str, default_preset: str = None) -> int:
     name = name.strip()
-    _exec("INSERT OR IGNORE INTO topics (name, created_by, default_preset, created_at) VALUES (?, ?, ?, ?)",
+    rows = _rows("SELECT id FROM topics WHERE name = ?", [name])
+    if rows:
+        tid = rows[0]["id"]
+        _exec("UPDATE topics SET deleted_at = NULL, created_by = ?, default_preset = ? WHERE id = ?",
+              [created_by, default_preset, tid])
+        return tid
+    _exec("INSERT INTO topics (name, created_by, default_preset, created_at) VALUES (?, ?, ?, ?)",
           [name, created_by, default_preset, _now()])
     return _rows("SELECT id FROM topics WHERE name = ?", [name])[0]["id"]
+
+def rename_topic(topic_id: int, name: str):
+    name = name.strip()
+    if not name or len(name) > 200:
+        raise ValueError("주제 이름을 1~200자로 입력해 주세요")
+    try:
+        _exec("UPDATE topics SET name = ? WHERE id = ? AND deleted_at IS NULL", [name, topic_id])
+    except Exception as e:
+        raise ValueError("이미 같은 이름의 주제가 있습니다.") from e
 
 
 def set_topic_preset(topic_id: int, default_preset: str):
@@ -342,20 +367,82 @@ def topic_has_send_history(topic_id: int) -> bool:
 
 
 def delete_topic(topic_id: int):
-    """주제를 삭제합니다. 발송 기록이 하나라도 있으면 삭제하지 않고
-    예외를 발생시킵니다 (화면에서도 미리 막지만, 동시 접속 등에 대비한
-    이중 안전장치). 템플릿(mail_templates)은 topic_id에 ON DELETE CASCADE가
-    걸려 있어 함께 지워집니다.
-    """
     if topic_has_send_history(topic_id):
-        raise ValueError("발송 기록이 있는 주제는 삭제할 수 없습니다.")
-    # mail_templates의 topic_id FK는 CASCADE이지만, libSQL 연결이 요청마다 새로
-    # 맺어져 PRAGMA foreign_keys가 이어지지 않을 수 있어 명시적으로도 함께 지운다.
-    _pipeline([
-        ("DELETE FROM mail_templates WHERE topic_id = ?", [topic_id]),
-        ("DELETE FROM topics WHERE id = ?", [topic_id]),
-    ])
+        _pipeline([
+            ("DELETE FROM mail_templates WHERE topic_id = ?", [topic_id]),
+            ("UPDATE topics SET deleted_at = ?, default_preset = NULL WHERE id = ?", [_now(), topic_id]),
+        ])
+    else:
+        _pipeline([
+            ("DELETE FROM mail_templates WHERE topic_id = ?", [topic_id]),
+            ("DELETE FROM topics WHERE id = ?", [topic_id]),
+        ])
 
+def list_archived_topics(owner_email: str = None) -> list:
+    sql = """SELECT t.id, t.name, t.deleted_at, COUNT(l.id) AS log_count
+             FROM topics t JOIN send_log l ON l.topic_id = t.id
+             WHERE t.deleted_at IS NOT NULL"""
+    args = []
+    if owner_email:
+        sql += " AND l.sender_email = ?"
+        args.append(owner_email.strip().lower())
+    sql += " GROUP BY t.id, t.name, t.deleted_at ORDER BY t.deleted_at DESC, t.id DESC"
+    return _rows(sql, args)
+
+def archived_topic_logs(topic_id: int, sender_email: str = None, limit: int = 200) -> list:
+    sql = """SELECT l.id, l.status, l.subject, l.sender_email, l.sender_name, l.sent_at,
+                    l.claimed_at, l.error, r.email AS r_email, r.company AS r_company,
+                    r.ceo AS r_ceo, t.name AS topic_name
+             FROM send_log l
+             JOIN recipients r ON r.id = l.recipient_id
+             JOIN topics t ON t.id = l.topic_id
+             WHERE l.topic_id = ? AND t.deleted_at IS NOT NULL"""
+    args = [topic_id]
+    if sender_email:
+        sql += " AND l.sender_email = ?"
+        args.append(sender_email.strip().lower())
+    sql += " ORDER BY l.claimed_at DESC, l.id DESC LIMIT ?"
+    args.append(limit)
+    out = []
+    for r in _rows(sql, args):
+        r["recipients"] = {"email": r.pop("r_email"), "company": r.pop("r_company"),
+                           "ceo": r.pop("r_ceo")}
+        out.append(r)
+    return out
+
+# ---------------------------------------------------------------- 임시 저장된 내 설정
+def list_saved_mail_settings(owner_email: str) -> list:
+    return _rows("SELECT id, name, data_json, created_at, updated_at FROM saved_mail_settings WHERE owner_email = ? ORDER BY updated_at DESC, id DESC",
+                 [owner_email.strip().lower()])
+
+def save_mail_setting(owner_email: str, name: str, data: dict, setting_id: int = None) -> int:
+    owner = owner_email.strip().lower()
+    name = (name or "").strip()[:200] or "임시 저장"
+    payload = json.dumps(data, ensure_ascii=False)
+    if setting_id:
+        _exec("UPDATE saved_mail_settings SET name = ?, data_json = ?, updated_at = ? WHERE id = ? AND owner_email = ?",
+              [name, payload, _now(), setting_id, owner])
+        return setting_id
+    _exec("INSERT INTO saved_mail_settings (owner_email, name, data_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+          [owner, name, payload, _now(), _now()])
+    return _rows("SELECT id FROM saved_mail_settings WHERE owner_email = ? ORDER BY id DESC LIMIT 1",
+                 [owner])[0]["id"]
+
+def get_saved_mail_setting(owner_email: str, setting_id: int) -> dict:
+    rows = _rows("SELECT id, name, data_json, created_at, updated_at FROM saved_mail_settings WHERE owner_email = ? AND id = ?",
+                 [owner_email.strip().lower(), setting_id])
+    if not rows:
+        return {}
+    r = rows[0]
+    try:
+        r["data"] = json.loads(r.pop("data_json") or "{}")
+    except Exception:
+        r["data"] = {}
+    return r
+
+def delete_saved_mail_setting(owner_email: str, setting_id: int):
+    _exec("DELETE FROM saved_mail_settings WHERE owner_email = ? AND id = ?",
+          [owner_email.strip().lower(), setting_id])
 
 # ---------------------------------------------------------------- 발신자 기본 설정
 def get_sender_prefs(email: str) -> dict:
