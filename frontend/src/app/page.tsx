@@ -1306,7 +1306,7 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="doc-tabs flex-1 min-w-0">
+              <div className="doc-tabs flex-1 min-w-0 min-h-[38px]">
                 {(["body", "footer", "form"] as const).map((tab) => (
                   <button
                     key={tab}
@@ -1350,7 +1350,7 @@ export default function Home() {
               )}
             </div>
 
-            <div className="h-[445px] overflow-hidden">
+            <div className="h-[445px] overflow-y-auto overflow-x-hidden">
             {activeTab === "body" && (
               <div className="space-y-2">
                 {bodyMode === "text" && (
