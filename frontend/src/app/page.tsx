@@ -184,7 +184,7 @@ function RichTextEditor({
         role="textbox"
         aria-label={ariaLabel}
         data-placeholder={placeholder || ""}
-        className="input min-h-[180px] overflow-auto text-sm leading-6 whitespace-pre-wrap focus:outline-none"
+        className="input min-h-[240px] overflow-auto text-sm leading-6 whitespace-pre-wrap focus:outline-none"
         onInput={(e) => {
           const html = e.currentTarget.innerHTML;
           lastExternalValue.current = html;
