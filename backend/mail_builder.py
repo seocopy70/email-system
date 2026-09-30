@@ -50,6 +50,19 @@ VAR_TAGS = [
 
 IMG_MARKER = "{이미지}"
 
+_RICH_TAG_RE = re.compile(r"</?(?:div|p|br|strong|b|em|i|u|font|span|ul|ol|li)(?:\s[^>]*)?>", re.I)
+
+def is_rich_text(value: str) -> bool:
+    return bool(_RICH_TAG_RE.search(str(value or "")))
+
+def html_to_plain(value: str) -> str:
+    """리치 텍스트 HTML을 text/plain용 문자열로 변환."""
+    text = re.sub(r"<br\s*/?>", "\n", str(value or ""), flags=re.I)
+    text = re.sub(r"</(?:div|p|li|h[1-6])\s*>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = _html.unescape(text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
 
 def sniff_image_subtype(data: bytes) -> str:
     """이미지 바이트에서 MIME 하위 타입을 판별 (png/jpeg/gif/webp)."""
@@ -201,9 +214,15 @@ def build_email_html(
 
     if use_plain and plain_body:
         used_templates.append(plain_body)
-        body = replace_placeholders(plain_body, row, sender_name, form_url, mode="plain")
-        body = fill(body).replace("\r\n", "\n").replace("\n", "<br>")
-        sections.append(f"<div>{body}</div>")
+        # 텍스트 모드도 간단한 서식을 사용할 수 있게 리치 텍스트 HTML을 그대로 렌더링합니다.
+        # 기존 일반 텍스트(줄바꿈)도 그대로 호환합니다.
+        body = replace_placeholders(plain_body, row, sender_name, form_url, mode="html" if is_rich_text(plain_body) else "plain")
+        body = fill(body)
+        if is_rich_text(plain_body):
+            sections.append(f"<div>{body}</div>")
+        else:
+            body = body.replace("\r\n", "\n").replace("\n", "<br>")
+            sections.append(f"<div>{body}</div>")
 
     if use_html and html_body:
         used_templates.append(html_body)
@@ -218,9 +237,14 @@ def build_email_html(
     footer_parts: list[str] = []
     if footer_text:
         used_templates.append(footer_text)
-        ft = replace_placeholders(footer_text, row, sender_name, form_url, mode="plain")
-        ft = ft.replace(IMG_MARKER, "").replace("\r\n", "\n").replace("\n", "<br>")
-        footer_parts.append(f"<div style='margin-top:18px;color:#444'>{ft}</div>")
+        # 푸터도 본문과 동일한 간단 서식을 지원합니다.
+        ft = replace_placeholders(footer_text, row, sender_name, form_url, mode="html" if is_rich_text(footer_text) else "plain")
+        ft = ft.replace(IMG_MARKER, "")
+        if is_rich_text(footer_text):
+            footer_parts.append(f"<div style='margin-top:18px;color:#444'>{ft}</div>")
+        else:
+            ft = ft.replace("\r\n", "\n").replace("\n", "<br>")
+            footer_parts.append(f"<div style='margin-top:18px;color:#444'>{ft}</div>")
     if footer_img_src:
         footer_parts.append(
             f'<div style="margin-top:16px">'
@@ -262,7 +286,7 @@ def build_plain_text(row: dict, plain_body: str, footer_text: str = "", sender_n
         t = str(t or "").replace("{구글설문버튼}", "{구글설문링크}")
         t = t.replace(IMG_MARKER, "").replace("{푸터이미지}", "")
         t = replace_placeholders(t, row, sender_name, form_url, mode="raw")
-        return t.replace("\r\n", "\n").strip()
+        return html_to_plain(t).replace("\r\n", "\n").strip()
 
     parts = [fill(plain_body)]
     url = normalize_form_url(form_url)
