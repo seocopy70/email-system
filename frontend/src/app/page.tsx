@@ -136,6 +136,7 @@ export default function Home() {
   const [loginName, setLoginName] = useState("");
   const [loginNameHistory, setLoginNameHistory] = useState<string[]>([]);
   const [senderNameLoading, setSenderNameLoading] = useState(false);
+  const [showOtherSenderName, setShowOtherSenderName] = useState(false);
   const [loginErr, setLoginErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -794,14 +795,22 @@ export default function Home() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <input
-              className="input"
-              list="loginNameHistory"
-              placeholder={senderNameLoading ? "발신자명 불러오는 중…" : "표시 이름 (선택, 비워두면 이전 이름 사용)"}
-              autoComplete="off"
-              value={loginName}
-              onChange={(e) => setLoginName(e.target.value)}
-            />
+            <div className="space-y-2">
+              <input
+                className="input"
+                list="loginNameHistory"
+                placeholder={senderNameLoading ? "발신자명 불러오는 중…" : "표시 이름 (선택, 비워두면 이전 이름 사용)"}
+                autoComplete="off"
+                value={loginName}
+                readOnly={Boolean(loginName) && !showOtherSenderName}
+                onChange={(e) => setLoginName(e.target.value)}
+              />
+              {loginName && !showOtherSenderName && (
+                <button type="button" className="text-xs text-ink-500 hover:text-ink-900 underline decoration-dotted" onClick={() => setShowOtherSenderName(true)}>
+                  다른 발신자명 입력 / 새로 선택
+                </button>
+              )}
+            </div>
             {loginNameHistory.length > 0 && (
               <datalist id="loginNameHistory">
                 {loginNameHistory.map((n) => (
