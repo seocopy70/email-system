@@ -541,6 +541,12 @@ export default function Home() {
     }
   }, [user]);
 
+  // 주제를 바꾸는 순간에는 이전 주제의 내용이 새 주제로 잘못 저장되지 않도록
+  // 복원이 끝날 때까지 자동 임시저장을 잠시 멈춥니다.
+  useEffect(() => {
+    if (user) draftHydrated.current = false;
+  }, [user, topicId]);
+
   useEffect(() => {
     if (!user || topicId == null || !draftHydrated.current) return;
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
