@@ -184,7 +184,7 @@ function RichTextEditor({
         role="textbox"
         aria-label={ariaLabel}
         data-placeholder={placeholder || ""}
-        className="input min-h-[240px] overflow-auto text-sm leading-6 whitespace-pre-wrap focus:outline-none"
+        className="input min-h-[300px] overflow-auto text-sm leading-6 whitespace-pre-wrap focus:outline-none"
         onInput={(e) => {
           const html = e.currentTarget.innerHTML;
           lastExternalValue.current = html;
@@ -202,8 +202,6 @@ export default function Home() {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginName, setLoginName] = useState("");
   const [loginNameHistory, setLoginNameHistory] = useState<string[]>([]);
-  const [senderNameLoading, setSenderNameLoading] = useState(false);
-  const [showOtherSenderName, setShowOtherSenderName] = useState(false);
   const [loginErr, setLoginErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -398,16 +396,6 @@ export default function Home() {
     if (!user || !user.is_admin || bottomTab !== "admin") return;
     api.senders().then(setSenders).catch(console.error);
   }, [user, bottomTab]);
-
-  useEffect(() => {
-    const email = loginEmail.trim();
-    if (!email || !email.includes("@")) return;
-    const timer = setTimeout(() => {
-      setSenderNameLoading(true);
-      api.senderName(email).then((r) => { if (r.name && !loginName.trim()) setLoginName(r.name); }).catch(() => {}).finally(() => setSenderNameLoading(false));
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [loginEmail]);
 
   useEffect(() => {
     try {
@@ -891,29 +879,30 @@ export default function Home() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <div className="space-y-2">
+            <div className="flex items-center gap-2">
               <input
-                className="input"
-                list="loginNameHistory"
-                placeholder={senderNameLoading ? "발신자명 불러오는 중…" : "표시 이름 (선택, 비워두면 이전 이름 사용)"}
+                className="input flex-1"
+                placeholder="표시 이름 (선택, 비워두면 이전 이름 사용)"
                 autoComplete="off"
                 value={loginName}
-                readOnly={Boolean(loginName) && !showOtherSenderName}
                 onChange={(e) => setLoginName(e.target.value)}
               />
-              {loginName && !showOtherSenderName && (
-                <button type="button" className="text-xs text-ink-500 hover:text-ink-900 underline decoration-dotted" onClick={() => setShowOtherSenderName(true)}>
-                  다른 발신자명 입력 / 새로 선택
-                </button>
+              {loginNameHistory.length > 0 && (
+                <select
+                  className="input w-auto min-w-[96px] cursor-pointer"
+                  aria-label="이전 발신자명 선택"
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) setLoginName(e.target.value);
+                  }}
+                >
+                  <option value="">이전 이름</option>
+                  {loginNameHistory.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
               )}
             </div>
-            {loginNameHistory.length > 0 && (
-              <datalist id="loginNameHistory">
-                {loginNameHistory.map((n) => (
-                  <option key={n} value={n} />
-                ))}
-              </datalist>
-            )}
             {loginErr && <p className="text-sm text-red-600">{loginErr}</p>}
             <button className="btn-primary w-full" disabled={busy} onClick={doLogin}>
               {busy ? "확인 중…" : "로그인"}
