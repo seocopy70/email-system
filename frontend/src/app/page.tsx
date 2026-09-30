@@ -187,7 +187,7 @@ function RichTextEditor({
         role="textbox"
         aria-label={ariaLabel}
         data-placeholder={placeholder || ""}
-        className="input min-h-[390px] max-h-[390px] overflow-y-auto overflow-x-hidden text-base leading-7 whitespace-pre-wrap focus:outline-none"
+        className="input min-h-[390px] max-h-[390px] overflow-y-auto overflow-x-hidden text-lg leading-7 whitespace-pre-wrap focus:outline-none"
         onInput={(e) => {
           const html = e.currentTarget.innerHTML;
           lastExternalValue.current = html;
@@ -942,7 +942,7 @@ export default function Home() {
             <div className="flex items-center gap-2">
               <span className="card-title mb-0 shrink-0 text-base">테마</span>
               <select
-                className="input text-base"
+                className="input text-lg"
                 aria-label="발송 주제"
                 value={topicId ?? ""}
                 onChange={(e) => setTopicId(Number(e.target.value))}
@@ -1030,7 +1030,7 @@ export default function Home() {
 
           <div className="card p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="card-title mb-0 text-base">메일 작성</div>
+              <div className="card-title mb-0 text-lg">메일 작성</div>
               <div className="flex items-center gap-2">
                 <button type="button" className="btn-ghost !py-1.5 !px-2.5 text-xs" title="현재 작성 중인 메일을 임시 저장" onClick={saveMySetting}>임시저장</button>
                 <button
@@ -1227,7 +1227,7 @@ export default function Home() {
               )}
             </div>
 
-            <div className={activeTab === "body" ? "min-h-[445px]" : ""}>
+            <div className="h-[445px] overflow-y-auto overflow-x-hidden">
             {activeTab === "body" && (
               <div className="space-y-2">
                 {bodyMode === "text" && (
