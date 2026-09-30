@@ -260,6 +260,8 @@ export default function Home() {
   const [archivedLogs, setArchivedLogs] = useState<Record<string, any[]>>({});
   const [topicMsg, setTopicMsg] = useState("");
   const lastEnteredTopic = useRef<number | null>(null);
+  const draftHydrated = useRef(false);
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const subjectRef = useRef<HTMLInputElement>(null);
   const htmlEditorRef = useRef<HTMLDivElement>(null);
   const plainEditorRef = useRef<HTMLDivElement>(null);
@@ -438,6 +440,7 @@ export default function Home() {
 
   function logout() {
     lastEnteredTopic.current = null;
+    draftHydrated.current = false;
     setUser(null);
     setPassword("");
     setAuthToken(null);
@@ -480,10 +483,46 @@ export default function Home() {
     setTopicMsg("");
     const list = await api.templates(user.email, tid);
     setTemplates(list);
-    const linked: string | null = topics.find((t) => t.id === tid)?.default_preset || null;
-    if (linked && presets[linked]) applyPreset(linked);
-    else if (linked && list.some((x: any) => x.name === linked)) await applyUserTemplate(linked, tid);
-    else clearCompose();
+
+    // 마지막 작업 메일이 같은 주제라면, 주제의 기본 템플릿보다 마지막 작업 상태를 우선 복원합니다.
+    let restoredDraft = false;
+    try {
+      const raw = localStorage.getItem(`emailDraft:${user.email}`);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (Number(d.topic_id) === tid && (d.subject || d.plain_body || d.html_body || d.footer_text)) {
+          setSubject(d.subject || "");
+          setPlainBody(d.plain_body || "");
+          setHtmlBody(d.html_body || "");
+          setBodyMode(d.body_mode === "text" ? "text" : "html");
+          setFooterMode(d.footer_mode === "image" || d.footer_mode === "none" ? d.footer_mode : "text");
+          setFooterText(d.footer_text || "감사합니다.\\n{발신자}");
+          setFooterImageB64(d.footer_image_b64 || null);
+          setFooterImageWidth(Number(d.footer_image_width) || 60);
+          setFooterImageAlign(d.footer_image_align === "왼쪽" || d.footer_image_align === "오른쪽" ? d.footer_image_align : "가운데");
+          setBodyImageB64(d.body_image_b64 || null);
+          setImageWidth(Number(d.image_width) || 80);
+          setImageAlign(d.image_align === "왼쪽" || d.image_align === "오른쪽" ? d.image_align : "가운데");
+          setUseBodyImage(Boolean(d.use_body_image));
+          setFormUrl(d.form_url || "");
+          setIncludeForm(Boolean(d.include_form));
+          setActiveTab(d.active_tab === "footer" || d.active_tab === "form" ? d.active_tab : "body");
+          const savedTemplate = d.active_tmpl || NO_TMPL;
+          setActiveTmpl(savedTemplate);
+          restoredDraft = true;
+        }
+      }
+    } catch {
+      // 브라우저 저장소를 사용할 수 없으면 기존 주제 진입 동작으로 진행합니다.
+    }
+
+    if (!restoredDraft) {
+      const linked: string | null = topics.find((t) => t.id === tid)?.default_preset || null;
+      if (linked && presets[linked]) applyPreset(linked);
+      else if (linked && list.some((x: any) => x.name === linked)) await applyUserTemplate(linked, tid);
+      else clearCompose();
+    }
+    draftHydrated.current = true;
   }
 
   useEffect(() => {
@@ -493,6 +532,84 @@ export default function Home() {
     enterTopic(topicId).catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, topicId, topics, presets]);
+
+  // 로그인 후 마지막 작업 메일을 자동 복원하고, 이후 변경사항을 브라우저에 임시 저장합니다.
+  useEffect(() => {
+    if (!user) {
+      draftHydrated.current = false;
+      return;
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || topicId == null || !draftHydrated.current) return;
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+
+    draftSaveTimer.current = setTimeout(() => {
+      try {
+        const draft = {
+          topic_id: topicId,
+          subject,
+          plain_body: plainBody,
+          html_body: htmlBody,
+          body_mode: bodyMode,
+          active_tmpl: activeTmpl,
+          footer_mode: footerMode,
+          footer_text: footerText,
+          footer_image_b64: footerImageB64,
+          footer_image_width: footerImageWidth,
+          footer_image_align: footerImageAlign,
+          body_image_b64: bodyImageB64,
+          image_width: imageWidth,
+          image_align: imageAlign,
+          use_body_image: useBodyImage,
+          form_url: formUrl,
+          include_form: includeForm,
+          active_tab: activeTab,
+        };
+
+        // 첨부파일 자체는 브라우저 localStorage 용량 때문에 자동 임시저장 대상에서 제외합니다.
+        const full = JSON.stringify(draft);
+        try {
+          localStorage.setItem(`emailDraft:${user.email}`, full);
+        } catch {
+          // 이미지가 너무 크면 텍스트/설정만 남겨 마지막 작업을 보존합니다.
+          const light = { ...draft, body_image_b64: null, footer_image_b64: null };
+          try {
+            localStorage.setItem(`emailDraft:${user.email}`, JSON.stringify(light));
+          } catch {
+            // 저장 공간을 사용할 수 없는 환경에서는 조용히 무시합니다.
+          }
+        }
+      } catch {
+        // 무시: 임시저장은 보조 기능이므로 메일 작성 자체를 방해하지 않습니다.
+      }
+    }, 500);
+
+    return () => {
+      if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    };
+  }, [
+    user,
+    topicId,
+    subject,
+    plainBody,
+    htmlBody,
+    bodyMode,
+    activeTmpl,
+    footerMode,
+    footerText,
+    footerImageB64,
+    footerImageWidth,
+    footerImageAlign,
+    bodyImageB64,
+    imageWidth,
+    imageAlign,
+    useBodyImage,
+    formUrl,
+    includeForm,
+    activeTab,
+  ]);
 
   // 주제를 바꾸면 이미 불러온 명단의 발송 여부를 그 주제 기준으로 다시 표시한다
   useEffect(() => {
@@ -1227,7 +1344,7 @@ export default function Home() {
               )}
             </div>
 
-            <div className="h-[445px] overflow-y-auto overflow-x-hidden">
+            <div className="h-[445px] overflow-hidden">
             {activeTab === "body" && (
               <div className="space-y-2">
                 {bodyMode === "text" && (
