@@ -184,14 +184,13 @@ function RichTextEditor({
         role="textbox"
         aria-label={ariaLabel}
         data-placeholder={placeholder || ""}
-        className="input min-h-[300px] overflow-auto text-sm leading-6 whitespace-pre-wrap focus:outline-none"
+        className="input min-h-[390px] max-h-[390px] overflow-y-auto overflow-x-hidden text-sm leading-6 whitespace-pre-wrap focus:outline-none"
         onInput={(e) => {
           const html = e.currentTarget.innerHTML;
           lastExternalValue.current = html;
           onChange(html);
         }}
       />
-      <p className="text-[11px] text-ink-500">원하는 문장을 드래그한 뒤 B / I / U / A+ / A−를 누르세요.</p>
     </div>
   );
 }
@@ -915,7 +914,7 @@ export default function Home() {
 
   const presetNames = Object.keys(presets);
   const userTmplNames = templates.map((t) => t.name);
-  // '본문 이미지 사용'을 체크하기 전까지는 {이미지} 변수를 끼워 넣어도 의미가 없으므로 비활성화
+  // '본문에 이미지 추가'을 체크하기 전까지는 {이미지} 변수를 끼워 넣어도 의미가 없으므로 비활성화
   const varTagsForBody = varTags.map((v) =>
     v.tag === "{이미지}" ? { ...v, disabled: !useBodyImage, hint: "먼저 아래 '본문 이미지 사용'을 체크하세요" } : v
   );
@@ -945,8 +944,8 @@ export default function Home() {
       <main className="max-w-[1400px] mx-auto p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
         <section className="space-y-3">
           <div className="card p-4 space-y-2">
-            <div className="card-title">발송 주제</div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              <span className="card-title mb-0 shrink-0">테마</span>
               <select
                 className="input"
                 aria-label="발송 주제"
@@ -1079,9 +1078,10 @@ export default function Home() {
                 </div>
               </div>
             )}
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-ink-900 shrink-0">템플릿</span>
               <select
-                className="input"
+                className="input flex-1 min-w-0"
                 aria-label="템플릿 선택"
                 value={activeTmpl}
                 disabled={topicId == null}
@@ -1189,24 +1189,22 @@ export default function Home() {
               />
             </div>
 
-            <div className="doc-tabs">
-              {(["body", "footer", "form"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  className="doc-tab"
-                  data-active={activeTab === tab}
-                  onClick={() => setActiveTab(tab)}
-                >
-                  {tab === "body" ? "본문" : tab === "footer" ? "푸터" : "설문지"}
-                </button>
-              ))}
-            </div>
-
-            <div className="scroll-box h-[380px]">
-            {activeTab === "body" && (
-              <div className="space-y-2">
-                <div className="seg">
+            <div className="flex items-center gap-2">
+              <div className="doc-tabs flex-1 min-w-0">
+                {(["body", "footer", "form"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    className="doc-tab"
+                    data-active={activeTab === tab}
+                    onClick={() => setActiveTab(tab)}
+                  >
+                    {tab === "body" ? "본문" : tab === "footer" ? "푸터" : "설문지"}
+                  </button>
+                ))}
+              </div>
+              {activeTab === "body" && (
+                <div className="seg shrink-0">
                   {(
                     [
                       ["html", "HTML"],
@@ -1219,31 +1217,41 @@ export default function Home() {
                     </button>
                   ))}
                 </div>
+              )}
+            </div>
+
+            <div className="h-[390px] overflow-visible">
+            {activeTab === "body" && (
+              <div className="space-y-2">
                 {(bodyMode === "text" || bodyMode === "both") && (
                   <div className="space-y-1">
-                    <div className="flex justify-end">
-                      <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("plain", tag)} />
-                    </div>
-                    <RichTextEditor
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 min-w-0">
+                        <RichTextEditor
                       value={plainBody}
                       onChange={setPlainBody}
                       placeholder={ex.plain_body}
                       editorRef={plainEditorRef}
                       ariaLabel="텍스트 본문"
                     />
+                      </div>
+                      <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("plain", tag)} />
+                    </div>
                   </div>
                 )}
                 {(bodyMode === "html" || bodyMode === "both") && (
                   <div className="space-y-1">
-                    <div className="flex justify-end">
-                      <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("html", tag)} />
-                    </div>
-                    <RichTextEditor
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 min-w-0">
+                        <RichTextEditor
                       value={htmlBody}
                       onChange={setHtmlBody}
                       placeholder={ex.html_body}
                       editorRef={htmlEditorRef}
                     />
+                      </div>
+                      <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("html", tag)} />
+                    </div>
                   </div>
                 )}
                 <label className="flex items-center gap-2 text-sm">
@@ -1253,9 +1261,6 @@ export default function Home() {
                 {useBodyImage && (
                   <div className="space-y-2 pl-1">
                     <input type="file" accept="image/*" onChange={(e) => onBodyImage(e.target.files?.[0] || null)} />
-                    <p className="text-xs text-ink-500">
-                      본문에 <code>{"{이미지}"}</code>를 넣으면 그 자리에, 없으면 본문 아래에 들어갑니다.
-                    </p>
                     <div className="flex items-center gap-2 text-sm">
                       <span className="text-ink-500">너비</span>
                       <input
@@ -1282,18 +1287,20 @@ export default function Home() {
 
             {activeTab === "footer" && (
               <div className="space-y-2">
-                <div className="seg">
-                  {(
-                    [
-                      ["text", "텍스트"],
-                      ["image", "이미지"],
-                      ["none", "사용 안 함"],
-                    ] as const
-                  ).map(([k, label]) => (
-                    <button key={k} type="button" data-active={footerMode === k} onClick={() => setFooterMode(k)}>
-                      {label}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2">
+                  <div className="seg shrink-0">
+                    {(
+                      [
+                        ["text", "텍스트"],
+                        ["image", "이미지"],
+                        ["none", "사용 안 함"],
+                      ] as const
+                    ).map(([k, label]) => (
+                      <button key={k} type="button" data-active={footerMode === k} onClick={() => setFooterMode(k)}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 {footerMode !== "none" && (
                   <RichTextEditor
@@ -1359,7 +1366,7 @@ export default function Home() {
 
             <div className="space-y-2 pt-2 border-t border-ink-200">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-ink-900">파일 첨부</span>
+                <span className="text-sm font-medium text-ink-900">파일 첨부 <span className="font-normal text-xs text-ink-500">(파일당 최대 10MB)</span></span>
                 {attachments.length > 0 && (
                   <span className="text-xs text-ink-500">
                     {attachments.length}개 · {(attachments.reduce((s, a) => s + a.size, 0) / (1024 * 1024)).toFixed(1)}MB
@@ -1390,7 +1397,6 @@ export default function Home() {
                   ))}
                 </ul>
               )}
-              <p className="text-xs text-ink-500">모든 수신자에게 동일하게 첨부됩니다 · 파일당 최대 10MB, 총 15MB</p>
             </div>
           </div>
         </section>
