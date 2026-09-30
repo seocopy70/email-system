@@ -66,8 +66,17 @@ class LoginBody(BaseModel):
 
 class TopicCreate(BaseModel):
     name: str
-    created_by: Optional[str] = None  # 무시됨 (로그인한 계정으로 기록)
-    default_preset: Optional[str] = None  # 비우면 빈 "직접 작성" 상태로 시작
+    created_by: Optional[str] = None
+    default_preset: Optional[str] = None
+
+class TopicRename(BaseModel):
+    name: str
+
+class MailSettingSave(BaseModel):
+    email: Optional[str] = None
+    name: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+    setting_id: Optional[int] = None
 
 
 class TemplateSave(BaseModel):
@@ -387,6 +396,22 @@ def meta():
     }
 
 
+@app.get("/api/auth/sender-name")
+def sender_name(email: str):
+    """로그인 화면에서 등록된 발신자명을 미리 채우기 위한 비밀번호 전 공개 조회.
+    메일 주소가 등록되어 있고 활성 계정인 경우에만 이름을 반환합니다.
+    """
+    try:
+        normalized = str(email).strip().lower()
+        if not normalized:
+            return {"name": ""}
+        sender = db.get_sender(normalized)
+        if not sender or not sender.get("is_active"):
+            return {"name": ""}
+        return {"name": _clean_name(sender.get("display_name") or "")}
+    except Exception:
+        return {"name": ""}
+
 @app.post("/api/auth/login")
 def login(body: LoginBody):
     ensure_db()
@@ -442,6 +467,15 @@ def create_topic(body: TopicCreate, user: dict = Depends(current_user)):
 @app.patch("/api/topics/{topic_id}/preset")
 def set_preset(topic_id: int, preset: str, user: dict = Depends(current_user)):
     db.set_topic_preset(topic_id, preset)
+    return {"ok": True}
+
+
+@app.patch("/api/topics/{topic_id}")
+def rename_topic(topic_id: int, body: TopicRename, user: dict = Depends(current_user)):
+    try:
+        db.rename_topic(topic_id, body.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True}
 
 
@@ -511,6 +545,32 @@ def save_prefs(body: PrefsBody, user: dict = Depends(current_user)):
     db.save_sender_prefs(_own(user, body.email), prefs)
     return {"ok": True}
 
+
+@app.get("/api/settings")
+def list_settings(user: dict = Depends(current_user)):
+    rows = db.list_saved_mail_settings(user["email"])
+    for r in rows:
+        r.pop("data_json", None)
+    return rows
+
+@app.get("/api/settings/{setting_id}")
+def get_setting(setting_id: int, user: dict = Depends(current_user)):
+    row = db.get_saved_mail_setting(user["email"], setting_id)
+    if not row:
+        raise HTTPException(404, "저장된 설정을 찾을 수 없습니다.")
+    return row
+
+@app.post("/api/settings")
+def save_setting(body: MailSettingSave, user: dict = Depends(current_user)):
+    if len(str(body.data)) > 20_000_000:
+        raise HTTPException(413, "임시 저장 내용이 너무 큽니다.")
+    sid = db.save_mail_setting(_own(user, body.email), body.name, body.data, body.setting_id)
+    return {"id": sid}
+
+@app.delete("/api/settings/{setting_id}")
+def delete_setting(setting_id: int, user: dict = Depends(current_user)):
+    db.delete_saved_mail_setting(user["email"], setting_id)
+    return {"ok": True}
 
 @app.post("/api/recipients/upsert")
 def upsert_recipients(body: UpsertRecipientsBody, user: dict = Depends(current_user)):
