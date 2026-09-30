@@ -1499,3 +1499,209 @@ export default function Home() {
                         <tr>
                           <th className="p-2 text-left w-12">선택</th>
                           <th className="p-2 text-left">회사</th>
+                          <th className="p-2 text-left">이메일</th>
+                          <th className="p-2 text-left">상태</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {recipients.map((r) => {
+                          const log = statusMap[String(r.recipient_id)] || statusMap[r.recipient_id];
+                          const st = log?.status || "none";
+                          const label =
+                            st === "sent" ? "발송완료" : st === "failed" ? "실패" : st === "pending" ? "발송중" : "미발송";
+                          const rowBg =
+                            st === "sent"
+                              ? "bg-emerald-50/60"
+                              : st === "failed"
+                                ? "bg-red-50/60"
+                                : st === "pending"
+                                  ? "bg-amber-50/60"
+                                  : "";
+                          const badge =
+                            st === "sent"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : st === "failed"
+                                ? "bg-red-100 text-red-800"
+                                : st === "pending"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-ink-100 text-ink-500";
+                          return (
+                            <tr key={r.recipient_id} className={`border-t border-ink-100 ${rowBg}`}>
+                              <td className="p-2">
+                                <input
+                                  type="checkbox"
+                                  checked={selected.has(String(r.recipient_id))}
+                                  onChange={(e) => {
+                                    const next = new Set(selected);
+                                    if (e.target.checked) next.add(String(r.recipient_id));
+                                    else next.delete(String(r.recipient_id));
+                                    setSelected(next);
+                                  }}
+                                />
+                              </td>
+                              <td className="p-2">{r.회사명}</td>
+                              <td className="p-2">{r.이메일}</td>
+                              <td className="p-2">
+                                <span className={`rounded-full px-2 py-0.5 text-xs ${badge}`}>{label}</span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button className="btn-primary" disabled={busy || !selected.size} onClick={doSend}>
+                      {busy ? "발송 중…" : `선택 ${selected.size}건 발송`}
+                    </button>
+                    {sendResult && <pre className="text-xs text-ink-700 whitespace-pre-wrap">{sendResult}</pre>}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {bottomTab === "stats" && (
+            <div className="space-y-3 text-sm">
+              {!stats ? (
+                <p className="text-ink-500">불러오는 중…</p>
+              ) : (
+                <>
+                  <p>
+                    DB 수신자 수: <b>{stats.recipients}</b>
+                  </p>
+                  <div>
+                    <div className="font-medium mb-1">오늘 계정별 발송</div>
+                    <ul className="list-disc pl-5 text-ink-700">
+                      {Object.entries(stats.sent_today || {}).map(([k, v]) => (
+                        <li key={k}>
+                          {k}: {String(v)}
+                        </li>
+                      ))}
+                      {!Object.keys(stats.sent_today || {}).length && <li>없음</li>}
+                    </ul>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {bottomTab === "logs" && (
+            <div className="space-y-3">
+              <div className="overflow-auto max-h-80 border border-ink-200 rounded-lg">
+              <table className="w-full text-sm">
+                <thead className="bg-ink-50 sticky top-0">
+                  <tr>
+                    <th className="p-2 text-left">시각</th>
+                    <th className="p-2 text-left">발신</th>
+                    <th className="p-2 text-left">수신</th>
+                    <th className="p-2 text-left">상태</th>
+                    <th className="p-2 text-left">제목</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.map((d) => (
+                    <tr key={d.id} className="border-t border-ink-100">
+                      <td className="p-2 whitespace-nowrap text-xs">{d.sent_at || d.claimed_at || "—"}</td>
+                      <td className="p-2">{d.sender_name || d.sender_email}</td>
+                      <td className="p-2">{d.recipients?.company || d.recipients?.email}</td>
+                      <td className="p-2">{d.status}</td>
+                      <td className="p-2 truncate max-w-[200px]">{d.subject}</td>
+                    </tr>
+                  ))}
+                  {!logs.length && (
+                    <tr>
+                      <td colSpan={5} className="p-4 text-ink-500 text-center">
+                        내역 없음 (주제 선택 후 확인)
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+              {archivedTopics.length > 0 && (
+                <div className="border border-amber-200 rounded-lg bg-amber-50/50">
+                  <button type="button" className="w-full flex items-center justify-between px-3 py-2 text-sm text-left" onClick={() => setExpandedArchivedTopic(expandedArchivedTopic === -1 ? null : -1)}>
+                    <span>삭제된 주제의 발송내역 ({archivedTopics.length})</span><ChevronDownIcon />
+                  </button>
+                  {expandedArchivedTopic === -1 && <div className="p-2 space-y-2 border-t border-amber-200">
+                    {archivedTopics.map((t) => <div key={t.id} className="border border-amber-200 rounded-md bg-white">
+                      <button type="button" className="w-full flex items-center justify-between px-2 py-2 text-sm text-left" onClick={() => toggleArchivedTopic(t.id)}>
+                        <span>{t.name}</span><span className="text-xs text-ink-500">{t.log_count}건</span>
+                      </button>
+                      {expandedArchivedTopic === t.id && <div className="overflow-auto border-t border-ink-100">
+                        <table className="w-full text-xs"><thead className="bg-ink-50"><tr><th className="p-2 text-left">시각</th><th className="p-2 text-left">수신</th><th className="p-2 text-left">상태</th><th className="p-2 text-left">제목</th></tr></thead>
+                        <tbody>{(archivedLogs[String(t.id)] || []).map((d) => <tr key={d.id} className="border-t border-ink-100"><td className="p-2">{d.sent_at || d.claimed_at || "—"}</td><td className="p-2">{d.recipients?.company || d.recipients?.email}</td><td className="p-2">{d.status}</td><td className="p-2 truncate max-w-[240px]">{d.subject}</td></tr>)}</tbody></table>
+                      </div>}
+                    </div>)}
+                  </div>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {bottomTab === "admin" && user.is_admin && (
+            <div className="space-y-3">
+              <div className="overflow-auto max-h-48 border border-ink-200 rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-ink-50">
+                    <tr>
+                      <th className="p-2 text-left">이메일</th>
+                      <th className="p-2 text-left">이름</th>
+                      <th className="p-2 text-left">관리자</th>
+                      <th className="p-2 text-left">활성</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {senders.map((s) => (
+                      <tr key={s.email} className="border-t border-ink-100">
+                        <td className="p-2">{s.email}</td>
+                        <td className="p-2">{s.display_name}</td>
+                        <td className="p-2">{s.is_admin ? "Y" : ""}</td>
+                        <td className="p-2">{s.is_active ? "Y" : "N"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  className="input"
+                  placeholder="Gmail"
+                  value={newSender.email}
+                  onChange={(e) => setNewSender({ ...newSender, email: e.target.value })}
+                />
+                <input
+                  className="input"
+                  placeholder="표시 이름"
+                  value={newSender.display_name}
+                  onChange={(e) => setNewSender({ ...newSender, display_name: e.target.value })}
+                />
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={newSender.is_admin}
+                    onChange={(e) => setNewSender({ ...newSender, is_admin: e.target.checked })}
+                  />
+                  관리자
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={newSender.is_active}
+                    onChange={(e) => setNewSender({ ...newSender, is_active: e.target.checked })}
+                  />
+                  활성
+                </label>
+              </div>
+              <button className="btn-primary" onClick={saveSender}>
+                등록 / 수정
+              </button>
+            </div>
+          )}
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}
