@@ -960,21 +960,45 @@ export default function Home() {
             <div className="flex items-center justify-between">
               <div className="card-title mb-0">메일 작성</div>
               <div className="flex items-center gap-2">
-                <button type="button" className="btn-ghost !py-1.5 !px-2.5 text-xs" title="현재 작성 중인 메일 전체를 임시 저장" onClick={saveMySetting}>내 설정 저장</button>
-                <button type="button" className="btn-ghost !py-1.5 !px-2.5 text-xs" title="저장된 메일 설정을 불러오거나 삭제" onClick={async () => { setSavedSettings(await api.settings()); setShowSettingsManager((v) => !v); }}>내 설정 관리</button>
+                <button type="button" className="btn-ghost !py-1.5 !px-2.5 text-xs" title="현재 작성 중인 메일을 임시 저장" onClick={saveMySetting}>임시저장</button>
+                <button
+                  type="button"
+                  className="btn-ghost !py-1.5 !px-2.5 text-xs"
+                  title="저장된 메일 설정 불러오기"
+                  onClick={async () => {
+                    const rows = await api.settings();
+                    setSavedSettings(rows || []);
+                    setShowSettingsManager(true);
+                  }}
+                >
+                  불러오기
+                </button>
               </div>
             </div>
             {showSettingsManager && (
-              <div className="bg-ink-50 border border-ink-200 rounded-lg p-2 space-y-1">
-                <div className="text-xs text-ink-500 px-1">저장된 메일 설정</div>
-                {!savedSettings.length && <div className="text-xs text-ink-500 px-1 py-2">저장된 설정이 없습니다.</div>}
-                {savedSettings.map((st) => (
-                  <div key={st.id} className="flex items-center gap-2 rounded-md border border-ink-200 bg-white px-2 py-1.5">
-                    <button type="button" className="flex-1 text-left text-sm truncate" onClick={() => loadMySetting(st.id)}>{st.name}</button>
-                    <button type="button" className="btn-ghost !px-2 !py-1" title="불러와 수정" onClick={() => loadMySetting(st.id)}><PencilIcon /></button>
-                    <button type="button" className="btn-ghost !px-2 !py-1" title="삭제" onClick={() => deleteMySetting(st.id)}><TrashIcon /></button>
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowSettingsManager(false); }}>
+                <div className="w-full max-w-md rounded-xl bg-white shadow-xl border border-ink-200 p-4 space-y-3" role="dialog" aria-modal="true" aria-label="저장된 메일 설정 불러오기">
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium text-ink-900">저장된 메일 설정</div>
+                    <button type="button" className="btn-ghost !px-2 !py-1 text-sm" onClick={() => setShowSettingsManager(false)} aria-label="닫기">닫기</button>
                   </div>
-                ))}
+                  {!savedSettings.length ? (
+                    <div className="text-sm text-ink-500 py-4 text-center">저장된 설정이 없습니다.</div>
+                  ) : (
+                    <div className="max-h-72 overflow-auto space-y-1">
+                      {savedSettings.map((st) => (
+                        <div key={st.id} className="flex items-center gap-2 rounded-md border border-ink-200 bg-white px-2 py-1.5">
+                          <button type="button" className="flex-1 text-left text-sm truncate py-1" onClick={() => loadMySetting(st.id)}>
+                            {st.name}
+                          </button>
+                          <button type="button" className="btn-ghost !px-2 !py-1" title="삭제" onClick={() => deleteMySetting(st.id)} aria-label="삭제">
+                            <TrashIcon />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             <div className="flex gap-2">
