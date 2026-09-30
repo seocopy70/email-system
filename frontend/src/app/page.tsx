@@ -187,7 +187,7 @@ function RichTextEditor({
         role="textbox"
         aria-label={ariaLabel}
         data-placeholder={placeholder || ""}
-        className="input min-h-[390px] max-h-[390px] overflow-y-auto overflow-x-hidden text-sm leading-6 whitespace-pre-wrap focus:outline-none"
+        className="input min-h-[390px] max-h-[390px] overflow-y-auto overflow-x-hidden text-base leading-7 whitespace-pre-wrap focus:outline-none"
         onInput={(e) => {
           const html = e.currentTarget.innerHTML;
           lastExternalValue.current = html;
@@ -865,7 +865,7 @@ export default function Home() {
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
-        <div className="w-full max-w-md">
+        <div className="w-full max-w-sm">
           <div className="mb-5 text-center">
             <div className="inline-block h-[3px] w-10 bg-brass rounded-full mb-3" />
             <h1 className="text-xl font-bold tracking-tight text-ink-900">기업 이메일 발송 시스템</h1>
@@ -881,29 +881,20 @@ export default function Home() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <div className="flex items-center gap-2">
+            <div>
               <input
-                className="input flex-1"
-                placeholder="표시 이름 (선택, 비워두면 이전 이름 사용)"
+                className="input"
+                placeholder="발신자 이름 (선택)"
                 autoComplete="off"
+                list="login-name-history"
                 value={loginName}
                 onChange={(e) => setLoginName(e.target.value)}
               />
-              {loginNameHistory.length > 0 && (
-                <select
-                  className="input w-auto min-w-[96px] cursor-pointer"
-                  aria-label="이전 발신자명 선택"
-                  value=""
-                  onChange={(e) => {
-                    if (e.target.value) setLoginName(e.target.value);
-                  }}
-                >
-                  <option value="">이전 이름</option>
-                  {loginNameHistory.map((n) => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
-              )}
+              <datalist id="login-name-history">
+                {loginNameHistory.map((n) => (
+                  <option key={n} value={n} />
+                ))}
+              </datalist>
             </div>
             {loginErr && <p className="text-sm text-red-600">{loginErr}</p>}
             <button className="btn-primary w-full" disabled={busy} onClick={doLogin}>
@@ -948,9 +939,9 @@ export default function Home() {
         <section className="space-y-3">
           <div className="card p-4 space-y-2">
             <div className="flex items-center gap-2">
-              <span className="card-title mb-0 shrink-0">테마</span>
+              <span className="card-title mb-0 shrink-0 text-base">테마</span>
               <select
-                className="input"
+                className="input text-base"
                 aria-label="발송 주제"
                 value={topicId ?? ""}
                 onChange={(e) => setTopicId(Number(e.target.value))}
@@ -1038,7 +1029,7 @@ export default function Home() {
 
           <div className="card p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="card-title mb-0">메일 작성</div>
+              <div className="card-title mb-0 text-base">메일 작성</div>
               <div className="flex items-center gap-2">
                 <button type="button" className="btn-ghost !py-1.5 !px-2.5 text-xs" title="현재 작성 중인 메일을 임시 저장" onClick={saveMySetting}>임시저장</button>
                 <button
@@ -1294,7 +1285,7 @@ export default function Home() {
 
             {activeTab === "footer" && (
               <div className="space-y-2">
-                {footerMode !== "none" && (
+                {footerMode === "text" && (
                   <RichTextEditor
                     value={footerText}
                     onChange={setFooterText}
@@ -1305,7 +1296,10 @@ export default function Home() {
                 )}
                 {footerMode === "image" && (
                   <div className="space-y-2">
-                    <input type="file" accept="image/*" onChange={(e) => onFooterImage(e.target.files?.[0] || null)} />
+                    <label className="btn-ghost inline-flex cursor-pointer items-center gap-2">
+                      이미지 선택
+                      <input type="file" accept="image/*" className="hidden" onChange={(e) => onFooterImage(e.target.files?.[0] || null)} />
+                    </label>
                     <div className="flex items-center gap-2 text-sm">
                       <span className="text-ink-500">너비</span>
                       <input
