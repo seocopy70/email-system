@@ -1320,17 +1320,30 @@ export default function Home() {
                 ))}
               </div>
               {activeTab === "body" && (
-                <div className="seg shrink-0">
-                  {(
-                    [
-                      ["html", "HTML"],
-                      ["text", "텍스트"],
-                    ] as const
-                  ).map(([k, label]) => (
-                    <button key={k} type="button" data-active={bodyMode === k} onClick={() => setBodyMode(k)}>
-                      {label}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    className="btn-ghost !py-1.5 !px-2.5 text-xs"
+                    data-active={useBodyImage}
+                    onClick={() => {
+                      setUseBodyImage(true);
+                      setShowBodyImageOptions(true);
+                    }}
+                  >
+                    {useBodyImage ? "이미지 설정" : "이미지 추가"}
+                  </button>
+                  <div className="seg shrink-0">
+                    {(
+                      [
+                        ["html", "HTML"],
+                        ["text", "텍스트"],
+                      ] as const
+                    ).map(([k, label]) => (
+                      <button key={k} type="button" data-active={bodyMode === k} onClick={() => setBodyMode(k)}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               {activeTab === "footer" && (
@@ -1350,7 +1363,7 @@ export default function Home() {
               )}
             </div>
 
-            <div className="h-[445px] overflow-y-auto overflow-x-hidden">
+            <div className="h-[445px] overflow-hidden">
             {activeTab === "body" && (
               <div className="space-y-2">
                 {bodyMode === "text" && (
@@ -1376,18 +1389,6 @@ export default function Home() {
                     />
                   </div>
                 )}
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={useBodyImage}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      setUseBodyImage(checked);
-                      setShowBodyImageOptions(checked);
-                    }}
-                  />
-                  본문에 이미지 추가
-                </label>
                 {showBodyImageOptions && (
                   <div
                     className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
