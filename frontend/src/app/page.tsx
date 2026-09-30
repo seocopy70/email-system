@@ -24,6 +24,9 @@ const PlusIcon = () => (
     <path d="M12 5v14M5 12h14" />
   </svg>
 );
+const PencilIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></svg>
+);
 const TrashIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" />
@@ -86,7 +89,7 @@ function VarMenu({
   return (
     <div className="relative inline-block" ref={boxRef}>
       <button type="button" className="var-menu-btn" onClick={() => setOpen((v) => !v)}>
-        변수 삽입
+        변수 넣기
         <ChevronDownIcon />
       </button>
       {open && (
@@ -132,6 +135,7 @@ export default function Home() {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginName, setLoginName] = useState("");
   const [loginNameHistory, setLoginNameHistory] = useState<string[]>([]);
+  const [senderNameLoading, setSenderNameLoading] = useState(false);
   const [loginErr, setLoginErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -176,6 +180,13 @@ export default function Home() {
   const [showNewTopic, setShowNewTopic] = useState(false);
   const [confirmDelTopic, setConfirmDelTopic] = useState(false);
   const [delTmplTarget, setDelTmplTarget] = useState<string | null>(null);
+  const [renameTopicOpen, setRenameTopicOpen] = useState(false);
+  const [renameTopicName, setRenameTopicName] = useState("");
+  const [savedSettings, setSavedSettings] = useState<any[]>([]);
+  const [showSettingsManager, setShowSettingsManager] = useState(false);
+  const [archivedTopics, setArchivedTopics] = useState<any[]>([]);
+  const [expandedArchivedTopic, setExpandedArchivedTopic] = useState<number | null>(null);
+  const [archivedLogs, setArchivedLogs] = useState<Record<string, any[]>>({});
   const [topicMsg, setTopicMsg] = useState("");
   const lastEnteredTopic = useRef<number | null>(null);
   const subjectRef = useRef<HTMLInputElement>(null);
@@ -234,6 +245,11 @@ export default function Home() {
       })
       .catch(() => {});
   }, [user, refreshTopics]);
+
+  useEffect(() => {
+    if (!user) return;
+    Promise.all([api.settings(), api.archivedTopics()]).then(([a,b]) => { setSavedSettings(a || []); setArchivedTopics(b || []); }).catch(() => {});
+  }, [user]);
 
   // 입력칸이 비어 있으면 회색 예시(기본형)를 보여주고, 미리보기도 그 예시 기준으로 그린다
   const ex = presets["기본형"] || {};
@@ -297,10 +313,28 @@ export default function Home() {
     api.topicLogs(topicId).then(setLogs).catch(console.error);
   }, [user, topicId, bottomTab]);
 
+  async function toggleArchivedTopic(id: number) {
+    if (expandedArchivedTopic === id) { setExpandedArchivedTopic(null); return; }
+    setExpandedArchivedTopic(id);
+    if (!archivedLogs[String(id)]) {
+      try { setArchivedLogs((p) => ({ ...p, [String(id)]: await api.archivedTopicLogs(id) })); } catch {}
+    }
+  }
+
   useEffect(() => {
     if (!user || !user.is_admin || bottomTab !== "admin") return;
     api.senders().then(setSenders).catch(console.error);
   }, [user, bottomTab]);
+
+  useEffect(() => {
+    const email = loginEmail.trim();
+    if (!email || !email.includes("@")) return;
+    const timer = setTimeout(() => {
+      setSenderNameLoading(true);
+      api.senderName(email).then((r) => { if (r.name && !loginName.trim()) setLoginName(r.name); }).catch(() => {}).finally(() => setSenderNameLoading(false));
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [loginEmail]);
 
   useEffect(() => {
     try {
@@ -479,20 +513,40 @@ export default function Home() {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function saveMyPrefs() {
-    if (!user) return;
-    await api.savePrefs(user.email, {
-      footer_mode: footerMode,
-      footer_text: footerText,
-      footer_image_b64: footerImageB64,
-      footer_image_width: footerImageWidth,
-      footer_image_align: footerImageAlign,
-      use_footer_image: footerMode === "image",
-      body_mode: bodyMode,
-    });
-    alert("기본 설정을 저장했습니다. (본문 형식 + 푸터 — 다음 로그인부터 자동 적용)");
+  function currentSettingData() {
+    return { sender_name: user?.name || "", topic_id: topicId, topic_name: topics.find((t) => t.id === topicId)?.name || "",
+      subject, plain_body: plainBody, html_body: htmlBody, body_mode: bodyMode, footer_mode: footerMode, footer_text: footerText,
+      footer_image_b64: footerImageB64, footer_image_width: footerImageWidth, footer_image_align: footerImageAlign, use_footer_image: footerMode === "image",
+      body_image_b64: bodyImageB64, image_width: imageWidth, image_align: imageAlign, use_body_image: useBodyImage, form_url: formUrl, include_form: includeForm, attachments };
   }
 
+  async function saveMySetting() {
+    if (!user) return;
+    const topicName = topics.find((t) => t.id === topicId)?.name || "메일";
+    const name = topicName + " · " + (subject.trim() || "임시 저장").slice(0, 120);
+    try { await api.saveSetting({ email: user.email, name, data: currentSettingData() }); setSavedSettings(await api.settings()); setShowSettingsManager(true); alert("현재 메일을 내 설정에 저장했습니다."); }
+    catch (e: any) { alert(e.message || "내 설정을 저장하지 못했습니다."); }
+  }
+
+  async function loadMySetting(id: number) {
+    if (!user) return;
+    try {
+      const row = await api.getSetting(id); const d = row.data || {};
+      let tid = Number(d.topic_id) || null;
+      if (!topics.find((t) => t.id === tid) && d.topic_name) { const created = await api.createTopic(d.topic_name, user.email); setTopics(await api.topics()); tid = created.id; }
+      if (tid) { lastEnteredTopic.current = tid; setTopicId(tid); setTemplates(await api.templates(user.email, tid)); }
+      setSubject(d.subject || ""); setPlainBody(d.plain_body || ""); setHtmlBody(d.html_body || ""); setBodyMode((d.body_mode as BodyMode) || "html");
+      setFooterMode((d.footer_mode as FooterMode) || "text"); setFooterText(d.footer_text || "감사합니다.\n{발신자}"); setFooterImageB64(d.footer_image_b64 || null);
+      setFooterImageWidth(Number(d.footer_image_width) || 60); setFooterImageAlign(d.footer_image_align || "가운데"); setBodyImageB64(d.body_image_b64 || null);
+      setImageWidth(Number(d.image_width) || 80); setImageAlign(d.image_align || "가운데"); setUseBodyImage(Boolean(d.use_body_image)); setFormUrl(d.form_url || "");
+      setIncludeForm(Boolean(d.include_form)); setAttachments(Array.isArray(d.attachments) ? d.attachments : []); setActiveTmpl(NO_TMPL); setShowSettingsManager(false);
+    } catch (e: any) { alert(e.message || "내 설정을 불러오지 못했습니다."); }
+  }
+
+  async function deleteMySetting(id: number) {
+    if (!confirm("이 내 설정을 삭제할까요?")) return;
+    try { await api.deleteSetting(id); setSavedSettings(await api.settings()); } catch (e: any) { alert(e.message || "내 설정을 삭제하지 못했습니다."); }
+  }
   async function addTopic() {
     if (!user || !newTopic.trim()) return;
     setTopicMsg("");
@@ -508,22 +562,10 @@ export default function Home() {
     }
   }
 
-  // 발송 기록이 하나라도 있는 주제는 지우지 않는다 (서버도 한 번 더 막는다)
-  async function requestDeleteTopic() {
-    if (topicId == null) return;
-    setTopicMsg("");
-    try {
-      const st = await api.topicStatus(topicId);
-      if (Object.keys(st || {}).length > 0) {
-        setConfirmDelTopic(false);
-        setTopicMsg("이미 발송 기록이 있는 주제는 삭제할 수 없습니다. 발송 내역은 그대로 보존됩니다.");
-        return;
-      }
-      setConfirmDelTopic(true);
-    } catch (e: any) {
-      setTopicMsg(e.message || "확인하지 못했습니다");
-    }
-  }
+  async function renameCurrentTopic() { if (topicId == null || !renameTopicName.trim()) return; try { await api.renameTopic(topicId, renameTopicName.trim()); setTopics(await api.topics()); setRenameTopicOpen(false); } catch (e: any) { setTopicMsg(e.message || "주제 이름을 수정하지 못했습니다."); } }
+
+  // 주제 삭제는 서버에서 이력이 있으면 보관 처리한다.
+  async function requestDeleteTopic() { if (topicId == null) return; setTopicMsg(""); setConfirmDelTopic(true); }
 
   async function doDeleteTopic() {
     if (topicId == null) return;
@@ -740,7 +782,7 @@ export default function Home() {
             <input
               className="input"
               list="loginNameHistory"
-              placeholder="표시 이름 (선택, 비워두면 이전 이름 사용)"
+              placeholder={senderNameLoading ? "발신자명 불러오는 중…" : "표시 이름 (선택, 비워두면 이전 이름 사용)"}
               autoComplete="off"
               value={loginName}
               onChange={(e) => setLoginName(e.target.value)}
@@ -820,7 +862,7 @@ export default function Home() {
                 }}
               >
                 <PlusIcon />
-              </button>
+              </button>{topicId != null && <button type="button" className="btn-ghost !px-2.5" title="주제 이름 수정" aria-label="주제 이름 수정" onClick={() => { setRenameTopicName(topics.find((t) => t.id === topicId)?.name || ""); setRenameTopicOpen(true); }}><PencilIcon /></button>}
               {topicId != null && (
                 <button
                   type="button"
@@ -833,6 +875,13 @@ export default function Home() {
                 </button>
               )}
             </div>
+            {renameTopicOpen && (
+              <div className="flex gap-2">
+                <input className="input" aria-label="주제 이름 수정" value={renameTopicName} onChange={(e) => setRenameTopicName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && renameCurrentTopic()} />
+                <button type="button" className="btn-primary" onClick={renameCurrentTopic}>저장</button>
+                <button type="button" className="btn-ghost" onClick={() => setRenameTopicOpen(false)}>취소</button>
+              </div>
+            )}
             {showNewTopic && (
               <div className="flex gap-2">
                 <input
@@ -879,15 +928,24 @@ export default function Home() {
           <div className="card p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="card-title mb-0">메일 작성</div>
-              <button
-                type="button"
-                className="text-xs text-ink-500 hover:text-ink-900 underline decoration-dotted underline-offset-2"
-                title="지금 화면의 '푸터'와 '본문 형식(HTML/텍스트/HTML+텍스트)'을 내 계정 기본값으로 저장합니다. 제목·본문 내용·변수는 저장되지 않으며(그건 템플릿 기능을 쓰세요), 다음에 로그인하면 이 푸터와 본문 형식이 자동으로 채워집니다."
-                onClick={saveMyPrefs}
-              >
-                내 기본설정 저장
-              </button>
+              <div className="flex items-center gap-2">
+                <button type="button" className="btn-ghost !py-1.5 !px-2.5 text-xs" title="현재 작성 중인 메일 전체를 임시 저장" onClick={saveMySetting}>내 설정 저장</button>
+                <button type="button" className="btn-ghost !py-1.5 !px-2.5 text-xs" title="저장된 메일 설정을 불러오거나 삭제" onClick={async () => { setSavedSettings(await api.settings()); setShowSettingsManager((v) => !v); }}>내 설정 관리</button>
+              </div>
             </div>
+            {showSettingsManager && (
+              <div className="bg-ink-50 border border-ink-200 rounded-lg p-2 space-y-1">
+                <div className="text-xs text-ink-500 px-1">저장된 메일 설정</div>
+                {!savedSettings.length && <div className="text-xs text-ink-500 px-1 py-2">저장된 설정이 없습니다.</div>}
+                {savedSettings.map((st) => (
+                  <div key={st.id} className="flex items-center gap-2 rounded-md border border-ink-200 bg-white px-2 py-1.5">
+                    <button type="button" className="flex-1 text-left text-sm truncate" onClick={() => loadMySetting(st.id)}>{st.name}</button>
+                    <button type="button" className="btn-ghost !px-2 !py-1" title="불러와 수정" onClick={() => loadMySetting(st.id)}><PencilIcon /></button>
+                    <button type="button" className="btn-ghost !px-2 !py-1" title="삭제" onClick={() => deleteMySetting(st.id)}><TrashIcon /></button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="flex gap-2">
               <select
                 className="input"
@@ -926,7 +984,7 @@ export default function Home() {
                 }}
               >
                 <PlusIcon />
-              </button>
+              </button><button type="button" className="btn-ghost !px-2.5" title="선택한 템플릿 수정" aria-label="선택한 템플릿 수정" disabled={!activeTmpl.startsWith("★ ")} onClick={() => { setSaveTmplName(activeTmpl.slice(2)); setShowSave(true); setDelTmplTarget(null); }}><PencilIcon /></button>
               <button
                 type="button"
                 className="btn-ghost !px-2.5"
@@ -1394,7 +1452,24 @@ export default function Home() {
                 </tbody>
               </table>
             </div>
-          )}
+              {archivedTopics.length > 0 && (
+                <div className="border border-amber-200 rounded-lg bg-amber-50/50">
+                  <button type="button" className="w-full flex items-center justify-between px-3 py-2 text-sm text-left" onClick={() => setExpandedArchivedTopic(expandedArchivedTopic === -1 ? null : -1)}>
+                    <span>삭제된 주제의 발송내역 ({archivedTopics.length})</span><ChevronDownIcon />
+                  </button>
+                  {expandedArchivedTopic === -1 && <div className="p-2 space-y-2 border-t border-amber-200">
+                    {archivedTopics.map((t) => <div key={t.id} className="border border-amber-200 rounded-md bg-white">
+                      <button type="button" className="w-full flex items-center justify-between px-2 py-2 text-sm text-left" onClick={() => toggleArchivedTopic(t.id)}>
+                        <span>{t.name}</span><span className="text-xs text-ink-500">{t.log_count}건</span>
+                      </button>
+                      {expandedArchivedTopic === t.id && <div className="overflow-auto border-t border-ink-100">
+                        <table className="w-full text-xs"><thead className="bg-ink-50"><tr><th className="p-2 text-left">시각</th><th className="p-2 text-left">수신</th><th className="p-2 text-left">상태</th><th className="p-2 text-left">제목</th></tr></thead>
+                        <tbody>{(archivedLogs[String(t.id)] || []).map((d) => <tr key={d.id} className="border-t border-ink-100"><td className="p-2">{d.sent_at || d.claimed_at || "—"}</td><td className="p-2">{d.recipients?.company || d.recipients?.email}</td><td className="p-2">{d.status}</td><td className="p-2 truncate max-w-[240px]">{d.subject}</td></tr>)}</tbody></table>
+                      </div>}
+                    </div>)}
+                  </div>}
+                </div>
+              )}          )}
 
           {bottomTab === "admin" && user.is_admin && (
             <div className="space-y-3">
