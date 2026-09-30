@@ -84,6 +84,9 @@ body {
 .doc-tab[data-active="false"] {
   @apply text-ink-500 hover:text-ink-700 hover:bg-ink-100/60;
 }
+.compose-tabs .doc-tab[data-active="true"] {
+  @apply !mt-0;
+}
 
 
 .seg {
