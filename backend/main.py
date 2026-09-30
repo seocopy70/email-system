@@ -600,6 +600,15 @@ def topic_logs(topic_id: int, sender_email: Optional[str] = None, limit: int = 2
     return db.log_detail(topic_id, sender_email, max(1, min(limit, 500)))
 
 
+@app.get("/api/archived-topics")
+def archived_topics(user: dict = Depends(current_user)):
+    return db.list_archived_topics(user["email"])
+
+@app.get("/api/archived-topics/{topic_id}/logs")
+def archived_logs(topic_id: int, limit: int = 200, user: dict = Depends(current_user)):
+    return db.archived_topic_logs(topic_id, user["email"], max(1, min(limit, 500)))
+
+
 @app.get("/api/stats")
 def stats(user: dict = Depends(current_user)):
     return {
