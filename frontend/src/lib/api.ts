@@ -55,6 +55,7 @@ export const api = {
     req<{ presets: Record<string, any>; var_tags: { label: string; tag: string }[]; gmail_daily_limit: number }>(
       "/api/meta"
     ),
+  senderName: (email: string) => req<{ name: string }>(`/api/auth/sender-name?email=${encodeURIComponent(email)}`),
   login: (email: string, password: string, display_name?: string) =>
     req<AuthUser>("/api/auth/login", {
       method: "POST",
@@ -68,6 +69,8 @@ export const api = {
     }),
   setTopicPreset: (id: number, preset: string) =>
     req(`/api/topics/${id}/preset?preset=${encodeURIComponent(preset)}`, { method: "PATCH" }),
+  renameTopic: (id: number, name: string) =>
+    req(`/api/topics/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   // 템플릿은 주제별로 따로 저장되므로 항상 topic_id가 필요합니다.
   templates: (owner: string, topicId: number) =>
     req<any[]>(`/api/templates?topic_id=${topicId}&owner_email=${encodeURIComponent(owner)}`),
@@ -87,6 +90,8 @@ export const api = {
       body: JSON.stringify({ items }),
     }),
   topicStatus: (topicId: number) => req<Record<string, any>>(`/api/topics/${topicId}/status`),
+  archivedTopics: () => req<any[]>("/api/archived-topics"),
+  archivedTopicLogs: (topicId: number) => req<any[]>(`/api/archived-topics/${topicId}/logs`),
   topicLogs: (topicId: number, senderEmail?: string) => {
     const q = senderEmail ? `?sender_email=${encodeURIComponent(senderEmail)}` : "";
     return req<any[]>(`/api/topics/${topicId}/logs${q}`);
@@ -107,6 +112,10 @@ export const api = {
   getPrefs: (email: string) => req<any>(`/api/prefs?email=${encodeURIComponent(email)}`),
   savePrefs: (email: string, prefs: any) =>
     req("/api/prefs", { method: "POST", body: JSON.stringify({ email, prefs }) }),
+  settings: () => req<any[]>("/api/settings"),
+  getSetting: (id: number) => req<any>(`/api/settings/${id}`),
+  saveSetting: (body: any) => req<{ id: number }>("/api/settings", { method: "POST", body: JSON.stringify(body) }),
+  deleteSetting: (id: number) => req(`/api/settings/${id}`, { method: "DELETE" }),
 };
 
 export function fileToBase64(file: File): Promise<string> {
