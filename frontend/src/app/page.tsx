@@ -136,12 +136,14 @@ function RichTextEditor({
   placeholder,
   editorRef,
   ariaLabel = "서식 입력창",
+  toolbarExtra,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   editorRef: React.RefObject<HTMLDivElement | null>;
   ariaLabel?: string;
+  toolbarExtra?: React.ReactNode;
 }) {
   const lastExternalValue = useRef(value);
 
@@ -176,6 +178,7 @@ function RichTextEditor({
         <span className="mx-1 h-5 w-px bg-ink-200" />
         <button type="button" className="btn-ghost !px-2 !py-1 text-xs" title="글자 크게" aria-label="글자 크게" onMouseDown={(e) => { e.preventDefault(); command("fontSize", "5"); }}>A+</button>
         <button type="button" className="btn-ghost !px-2 !py-1 text-xs" title="글자 작게" aria-label="글자 작게" onMouseDown={(e) => { e.preventDefault(); command("fontSize", "3"); }}>A−</button>
+        {toolbarExtra}
       </div>
       <div
         ref={editorRef}
@@ -1218,6 +1221,21 @@ export default function Home() {
                   ))}
                 </div>
               )}
+              {activeTab === "footer" && (
+                <div className="seg shrink-0">
+                  {(
+                    [
+                      ["text", "텍스트"],
+                      ["image", "이미지"],
+                      ["none", "사용 안 함"],
+                    ] as const
+                  ).map(([k, label]) => (
+                    <button key={k} type="button" data-active={footerMode === k} onClick={() => setFooterMode(k)}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="h-[390px] overflow-visible">
@@ -1225,38 +1243,30 @@ export default function Home() {
               <div className="space-y-2">
                 {(bodyMode === "text" || bodyMode === "both") && (
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 min-w-0">
-                        <RichTextEditor
+                    <RichTextEditor
                       value={plainBody}
                       onChange={setPlainBody}
                       placeholder={ex.plain_body}
                       editorRef={plainEditorRef}
                       ariaLabel="텍스트 본문"
+                      toolbarExtra={<VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("plain", tag)} />}
                     />
-                      </div>
-                      <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("plain", tag)} />
-                    </div>
                   </div>
                 )}
                 {(bodyMode === "html" || bodyMode === "both") && (
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 min-w-0">
-                        <RichTextEditor
+                    <RichTextEditor
                       value={htmlBody}
                       onChange={setHtmlBody}
                       placeholder={ex.html_body}
                       editorRef={htmlEditorRef}
+                      toolbarExtra={<VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("html", tag)} />}
                     />
-                      </div>
-                      <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("html", tag)} />
-                    </div>
                   </div>
                 )}
                 <label className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={useBodyImage} onChange={(e) => setUseBodyImage(e.target.checked)} />
-                  본문 이미지 사용
+                  본문에 이미지 추가
                 </label>
                 {useBodyImage && (
                   <div className="space-y-2 pl-1">
@@ -1287,21 +1297,6 @@ export default function Home() {
 
             {activeTab === "footer" && (
               <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <div className="seg shrink-0">
-                    {(
-                      [
-                        ["text", "텍스트"],
-                        ["image", "이미지"],
-                        ["none", "사용 안 함"],
-                      ] as const
-                    ).map(([k, label]) => (
-                      <button key={k} type="button" data-active={footerMode === k} onClick={() => setFooterMode(k)}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
                 {footerMode !== "none" && (
                   <RichTextEditor
                     value={footerText}
