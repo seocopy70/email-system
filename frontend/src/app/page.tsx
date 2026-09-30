@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { api, AuthUser, fileToBase64, setAuthToken, setUnauthorizedHandler } from "@/lib/api";
 
-type BodyMode = "html" | "text" | "both";
+type BodyMode = "html" | "text";
 type FooterMode = "text" | "image" | "none";
 type BottomTab = "list" | "stats" | "logs" | "admin";
 
@@ -311,7 +311,7 @@ export default function Home() {
         if (p.footer_image_width) setFooterImageWidth(Number(p.footer_image_width) || 60);
         if (p.footer_image_align === "왼쪽" || p.footer_image_align === "가운데" || p.footer_image_align === "오른쪽")
           setFooterImageAlign(p.footer_image_align);
-        if (p.body_mode === "html" || p.body_mode === "text" || p.body_mode === "both") setBodyMode(p.body_mode);
+        if (p.body_mode === "html" || p.body_mode === "text") setBodyMode(p.body_mode);
       })
       .catch(() => {});
   }, [user, refreshTopics]);
@@ -1179,17 +1179,15 @@ export default function Home() {
             )}
 
             <div className="space-y-1">
-              <div className="flex justify-end">
-                <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("subject", tag)} />
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-ink-900 shrink-0">제목</span>
+                <div className="relative flex-1 min-w-0">
+                  <input ref={subjectRef} className="input pr-24" aria-label="제목" placeholder={ex.subject || "제목"} value={subject} onChange={(e) => setSubject(e.target.value)} />
+                  <div className="absolute right-1 top-1/2 -translate-y-1/2">
+                    <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("subject", tag)} />
+                  </div>
+                </div>
               </div>
-              <input
-                ref={subjectRef}
-                className="input"
-                aria-label="제목"
-                placeholder={ex.subject || "제목"}
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-              />
             </div>
 
             <div className="flex items-center gap-2">
@@ -1212,7 +1210,6 @@ export default function Home() {
                     [
                       ["html", "HTML"],
                       ["text", "텍스트"],
-                      ["both", "HTML+텍스트"],
                     ] as const
                   ).map(([k, label]) => (
                     <button key={k} type="button" data-active={bodyMode === k} onClick={() => setBodyMode(k)}>
@@ -1227,7 +1224,7 @@ export default function Home() {
                     [
                       ["text", "텍스트"],
                       ["image", "이미지"],
-                      ["none", "사용 안 함"],
+                      ["none", "없음"],
                     ] as const
                   ).map(([k, label]) => (
                     <button key={k} type="button" data-active={footerMode === k} onClick={() => setFooterMode(k)}>
@@ -1361,15 +1358,20 @@ export default function Home() {
 
             <div className="space-y-2 pt-2 border-t border-ink-200">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-ink-900">파일 첨부 <span className="font-normal text-xs text-ink-500">(파일당 최대 10MB)</span></span>
+                <div className="flex items-center gap-2">
+                  <label className="btn-ghost inline-flex cursor-pointer items-center gap-2 !py-1.5">
+                    파일첨부
+                    <input type="file" multiple className="hidden" onChange={(e) => onAttachFiles(e.target.files)} />
+                  </label>
+                  <span className="text-xs text-ink-500">(파일당 최대 10MB)</span>
+                </div>
                 {attachments.length > 0 && (
                   <span className="text-xs text-ink-500">
                     {attachments.length}개 · {(attachments.reduce((s, a) => s + a.size, 0) / (1024 * 1024)).toFixed(1)}MB
                   </span>
                 )}
               </div>
-              <input type="file" multiple onChange={(e) => onAttachFiles(e.target.files)} />
-              {attachments.length > 0 && (
+                            {attachments.length > 0 && (
                 <ul className="space-y-1">
                   {attachments.map((a, i) => (
                     <li
@@ -1404,8 +1406,9 @@ export default function Home() {
               <button type="button" data-active={previewMode === "mobile"} onClick={() => setPreviewMode("mobile")}>📱 모바일</button>
             </div>
           </div>
-          <div className="text-xs text-ink-500 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2 shrink-0">
-            <b>제목</b> {previewSubj || "—"}
+          <div className="text-sm text-ink-700 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2.5 shrink-0">
+            <b className="text-base">제목</b>
+            <span className="ml-2 text-base font-medium text-ink-900">{previewSubj || "—"}</span>
           </div>
           <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden min-h-[520px] md:flex-1 flex items-start justify-center p-3">
             <iframe
@@ -1441,7 +1444,10 @@ export default function Home() {
           <div className="card rounded-tl-none p-4 space-y-3">
           {bottomTab === "list" && (
             <div className="space-y-3">
-              <input type="file" accept=".xlsx,.xls" onChange={(e) => e.target.files?.[0] && onExcel(e.target.files[0])} />
+              <label className="btn-ghost inline-flex cursor-pointer items-center gap-2">
+                불러오기
+                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => e.target.files?.[0] && onExcel(e.target.files[0])} />
+              </label>
               {recipients.length > 0 && (
                 <>
                   <div className="flex flex-wrap items-center gap-2 text-xs">
