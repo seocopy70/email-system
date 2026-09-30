@@ -940,7 +940,7 @@ export default function Home() {
         <section className="space-y-3">
           <div className="card p-4 space-y-2">
             <div className="flex items-center gap-2">
-              <span className="card-title mb-0 shrink-0 text-base">테마</span>
+              <span className="card-title mb-0 shrink-0 !text-base">테마</span>
               <select
                 className="input text-lg"
                 aria-label="발송 주제"
@@ -1030,7 +1030,7 @@ export default function Home() {
 
           <div className="card p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="card-title mb-0 text-lg">메일 작성</div>
+              <div className="card-title mb-0 !text-base">메일 작성</div>
               <div className="flex items-center gap-2">
                 <button type="button" className="btn-ghost !py-1.5 !px-2.5 text-xs" title="현재 작성 중인 메일을 임시 저장" onClick={saveMySetting}>임시저장</button>
                 <button
