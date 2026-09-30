@@ -129,6 +129,71 @@ function pickSelectable(items: any[], st: Record<string, any>): Set<string> {
   );
 }
 
+
+function RichTextEditor({
+  value,
+  onChange,
+  placeholder,
+  editorRef,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  editorRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const lastExternalValue = useRef(value);
+
+  useEffect(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    if (document.activeElement !== el && lastExternalValue.current !== value) {
+      el.innerHTML = value || "";
+    }
+    lastExternalValue.current = value;
+  }, [value, editorRef]);
+
+  useEffect(() => {
+    const el = editorRef.current;
+    if (el && el.innerHTML !== value) el.innerHTML = value || "";
+  }, []);
+
+  function command(name: string, arg?: string) {
+    editorRef.current?.focus();
+    document.execCommand(name, false, arg);
+    const html = editorRef.current?.innerHTML || "";
+    lastExternalValue.current = html;
+    onChange(html);
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-1 rounded-md border border-ink-200 bg-ink-50 px-1.5 py-1">
+        <button type="button" className="btn-ghost !px-2 !py-1 text-xs font-bold" title="굵게" aria-label="굵게" onMouseDown={(e) => { e.preventDefault(); command("bold"); }}>B</button>
+        <button type="button" className="btn-ghost !px-2 !py-1 text-xs italic" title="이탤릭" aria-label="이탤릭" onMouseDown={(e) => { e.preventDefault(); command("italic"); }}>I</button>
+        <button type="button" className="btn-ghost !px-2 !py-1 text-xs underline" title="밑줄" aria-label="밑줄" onMouseDown={(e) => { e.preventDefault(); command("underline"); }}>U</button>
+        <span className="mx-1 h-5 w-px bg-ink-200" />
+        <button type="button" className="btn-ghost !px-2 !py-1 text-xs" title="글자 크게" aria-label="글자 크게" onMouseDown={(e) => { e.preventDefault(); command("fontSize", "5"); }}>A+</button>
+        <button type="button" className="btn-ghost !px-2 !py-1 text-xs" title="글자 작게" aria-label="글자 작게" onMouseDown={(e) => { e.preventDefault(); command("fontSize", "3"); }}>A−</button>
+      </div>
+      <div
+        ref={editorRef}
+        contentEditable
+        suppressContentEditableWarning
+        role="textbox"
+        aria-label="HTML 본문"
+        data-placeholder={placeholder || ""}
+        className="input min-h-[180px] overflow-auto text-sm leading-6 whitespace-pre-wrap focus:outline-none"
+        onInput={(e) => {
+          const html = e.currentTarget.innerHTML;
+          lastExternalValue.current = html;
+          onChange(html);
+        }}
+      />
+      <p className="text-[11px] text-ink-500">원하는 문장을 드래그한 뒤 B / I / U / A+ / A−를 누르세요.</p>
+    </div>
+  );
+}
+
 export default function Home() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [password, setPassword] = useState("");
@@ -194,6 +259,7 @@ export default function Home() {
   const subjectRef = useRef<HTMLInputElement>(null);
   const plainRef = useRef<HTMLTextAreaElement>(null);
   const htmlRef = useRef<HTMLTextAreaElement>(null);
+  const htmlEditorRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLTextAreaElement>(null);
 
   const [bottomTab, setBottomTab] = useState<BottomTab>("list");
@@ -1161,13 +1227,11 @@ export default function Home() {
                     <div className="flex justify-end">
                       <VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("html", tag)} />
                     </div>
-                    <textarea
-                      ref={htmlRef}
-                      className="input min-h-[140px] font-mono text-xs"
-                      aria-label="HTML 본문"
-                      placeholder={ex.html_body}
+                    <RichTextEditor
                       value={htmlBody}
-                      onChange={(e) => setHtmlBody(e.target.value)}
+                      onChange={setHtmlBody}
+                      placeholder={ex.html_body}
+                      editorRef={htmlEditorRef}
                     />
                   </div>
                 )}
