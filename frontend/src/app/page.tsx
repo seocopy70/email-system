@@ -237,6 +237,7 @@ export default function Home() {
 
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewSubj, setPreviewSubj] = useState("");
+  const [previewMode, setPreviewMode] = useState<"pc" | "mobile">("pc");
 
   const [recipients, setRecipients] = useState<any[]>([]);
   const [statusMap, setStatusMap] = useState<Record<string, any>>({});
@@ -1406,14 +1407,20 @@ export default function Home() {
         </section>
 
         <section className="card p-4 space-y-2 md:flex md:flex-col">
-          <div className="card-title shrink-0">실시간 미리보기</div>
+          <div className="flex items-center justify-between shrink-0">
+            <div className="card-title">실시간 미리보기</div>
+            <div className="seg">
+              <button type="button" data-active={previewMode === "pc"} onClick={() => setPreviewMode("pc")}>PC</button>
+              <button type="button" data-active={previewMode === "mobile"} onClick={() => setPreviewMode("mobile")}>📱 모바일</button>
+            </div>
+          </div>
           <div className="text-xs text-ink-500 bg-ink-50 border border-ink-200 rounded-lg px-3 py-2 shrink-0">
             <b>제목</b> {previewSubj || "—"}
           </div>
-          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden h-[60vh] min-h-[360px] md:h-auto md:flex-1">
+          <div className="bg-ink-100 rounded-lg border border-ink-200 overflow-hidden min-h-[520px] md:flex-1 flex items-start justify-center p-3">
             <iframe
-              title="preview"
-              className="w-full h-full bg-white"
+              title={previewMode === "mobile" ? "mobile-preview" : "preview"}
+              className={previewMode === "mobile" ? "bg-white h-full w-[375px] max-w-full shadow-sm" : "w-full h-full bg-white"}
               sandbox="allow-popups"
               srcDoc={previewHtml || "<p style='padding:16px;color:#888'>미리보기</p>"}
             />
