@@ -784,8 +784,8 @@ export default function Home() {
       if (!ok) return;
     }
     // 눌렀을 때 바로 확인: 제목/본문이 비어 있으면 보내지 않는다
-    const needText = bodyMode === "text" || bodyMode === "both";
-    const needHtml = bodyMode === "html" || bodyMode === "both";
+    const needText = bodyMode === "text";
+    const needHtml = bodyMode === "html";
     if (!subject.trim() || (needText && !plainBody.trim()) || (needHtml && !htmlBody.trim())) {
       alert("제목과 본문을 입력해 주세요.");
       return;
