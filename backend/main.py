@@ -602,11 +602,11 @@ def topic_logs(topic_id: int, sender_email: Optional[str] = None, limit: int = 2
 
 @app.get("/api/archived-topics")
 def archived_topics(user: dict = Depends(current_user)):
-    return db.list_archived_topics(user["email"])
+    return db.list_archived_topics()
 
 @app.get("/api/archived-topics/{topic_id}/logs")
 def archived_logs(topic_id: int, limit: int = 200, user: dict = Depends(current_user)):
-    return db.archived_topic_logs(topic_id, user["email"], max(1, min(limit, 500)))
+    return db.archived_topic_logs(topic_id, None, max(1, min(limit, 500)))
 
 
 @app.get("/api/stats")
