@@ -185,6 +185,7 @@ export default function Home() {
   const [renameTopicName, setRenameTopicName] = useState("");
   const [savedSettings, setSavedSettings] = useState<any[]>([]);
   const [showSettingsManager, setShowSettingsManager] = useState(false);
+  const [editingSettingId, setEditingSettingId] = useState<number | null>(null);
   const [archivedTopics, setArchivedTopics] = useState<any[]>([]);
   const [expandedArchivedTopic, setExpandedArchivedTopic] = useState<number | null>(null);
   const [archivedLogs, setArchivedLogs] = useState<Record<string, any[]>>({});
@@ -528,7 +529,13 @@ export default function Home() {
     if (!user) return;
     const topicName = topics.find((t) => t.id === topicId)?.name || "메일";
     const name = topicName + " · " + (subject.trim() || "임시 저장").slice(0, 120);
-    try { await api.saveSetting({ email: user.email, name, data: currentSettingData() }); setSavedSettings(await api.settings()); setShowSettingsManager(true); alert("현재 메일을 내 설정에 저장했습니다."); }
+    try {
+      const result = await api.saveSetting({ email: user.email, name, data: currentSettingData(), setting_id: editingSettingId || undefined });
+      setEditingSettingId(result.id);
+      setSavedSettings(await api.settings());
+      setShowSettingsManager(true);
+      alert(editingSettingId ? "내 설정을 수정해 저장했습니다." : "현재 메일을 내 설정에 저장했습니다.");
+    }
     catch (e: any) { alert(e.message || "내 설정을 저장하지 못했습니다."); }
   }
 
@@ -555,7 +562,7 @@ export default function Home() {
       setFooterMode((d.footer_mode as FooterMode) || "text"); setFooterText(d.footer_text || "감사합니다.\n{발신자}"); setFooterImageB64(d.footer_image_b64 || null);
       setFooterImageWidth(Number(d.footer_image_width) || 60); setFooterImageAlign(d.footer_image_align || "가운데"); setBodyImageB64(d.body_image_b64 || null);
       setImageWidth(Number(d.image_width) || 80); setImageAlign(d.image_align || "가운데"); setUseBodyImage(Boolean(d.use_body_image)); setFormUrl(d.form_url || "");
-      setIncludeForm(Boolean(d.include_form)); setAttachments(Array.isArray(d.attachments) ? d.attachments : []); setActiveTmpl(d.template_name ? "★ " + d.template_name : NO_TMPL); setShowSettingsManager(false);
+      setIncludeForm(Boolean(d.include_form)); setAttachments(Array.isArray(d.attachments) ? d.attachments : []); setActiveTmpl(d.template_name ? "★ " + d.template_name : NO_TMPL); setEditingSettingId(id); setShowSettingsManager(false);
     } catch (e: any) { alert(e.message || "내 설정을 불러오지 못했습니다."); }
   }
 
