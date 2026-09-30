@@ -317,7 +317,10 @@ export default function Home() {
     if (expandedArchivedTopic === id) { setExpandedArchivedTopic(null); return; }
     setExpandedArchivedTopic(id);
     if (!archivedLogs[String(id)]) {
-      try { setArchivedLogs((p) => ({ ...p, [String(id)]: await api.archivedTopicLogs(id) })); } catch {}
+      try {
+        const rows = await api.archivedTopicLogs(id);
+        setArchivedLogs((p) => ({ ...p, [String(id)]: rows }));
+      } catch {}
     }
   }
 
@@ -1421,7 +1424,8 @@ export default function Home() {
           )}
 
           {bottomTab === "logs" && (
-            <div className="overflow-auto max-h-80 border border-ink-200 rounded-lg">
+            <div className="space-y-3">
+              <div className="overflow-auto max-h-80 border border-ink-200 rounded-lg">
               <table className="w-full text-sm">
                 <thead className="bg-ink-50 sticky top-0">
                   <tr>
@@ -1469,7 +1473,9 @@ export default function Home() {
                     </div>)}
                   </div>}
                 </div>
-              )}          )}
+              )}
+            </div>
+          )}
 
           {bottomTab === "admin" && user.is_admin && (
             <div className="space-y-3">
