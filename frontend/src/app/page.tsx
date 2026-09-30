@@ -171,7 +171,7 @@ function RichTextEditor({
 
   return (
     <div className="space-y-1">
-      <div className="flex flex-wrap items-center gap-1 rounded-md border border-ink-200 bg-ink-50 px-1.5 py-1">
+      <div className="flex h-[38px] min-h-[38px] shrink-0 flex-wrap items-center gap-1 overflow-hidden rounded-md border border-ink-200 bg-ink-50 px-1.5 py-1">
         <button type="button" className="btn-ghost !px-2 !py-1 text-xs font-bold" title="굵게" aria-label="굵게" onMouseDown={(e) => { e.preventDefault(); command("bold"); }}>B</button>
         <button type="button" className="btn-ghost !px-2 !py-1 text-xs italic" title="이탤릭" aria-label="이탤릭" onMouseDown={(e) => { e.preventDefault(); command("italic"); }}>I</button>
         <button type="button" className="btn-ghost !px-2 !py-1 text-xs underline" title="밑줄" aria-label="밑줄" onMouseDown={(e) => { e.preventDefault(); command("underline"); }}>U</button>
