@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 import os
+import json
 
 KST = ZoneInfo("Asia/Seoul")
 STALE_PENDING_MIN = 30  # 이 시간 넘게 '발송중'이면 다시 선점 가능 (앱이 중간에 종료된 경우 대비)
