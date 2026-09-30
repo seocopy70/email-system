@@ -259,12 +259,9 @@ export default function Home() {
   const [topicMsg, setTopicMsg] = useState("");
   const lastEnteredTopic = useRef<number | null>(null);
   const subjectRef = useRef<HTMLInputElement>(null);
-  const plainRef = useRef<HTMLTextAreaElement>(null);
-  const htmlRef = useRef<HTMLTextAreaElement>(null);
   const htmlEditorRef = useRef<HTMLDivElement>(null);
   const plainEditorRef = useRef<HTMLDivElement>(null);
   const footerEditorRef = useRef<HTMLDivElement>(null);
-  const footerRef = useRef<HTMLTextAreaElement>(null);
 
   const [bottomTab, setBottomTab] = useState<BottomTab>("list");
   const [stats, setStats] = useState<any>(null);
