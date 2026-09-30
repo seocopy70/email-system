@@ -1320,6 +1320,7 @@ export default function Home() {
                     placeholder="푸터 문구"
                     editorRef={footerEditorRef}
                     ariaLabel="푸터 문구"
+                    toolbarExtra={<VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("footer", tag)} />}
                   />
                 )}
                 {footerMode === "image" && (
