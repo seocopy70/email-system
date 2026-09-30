@@ -1305,8 +1305,8 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="doc-tabs flex-1 min-w-0 min-h-[38px]">
+            <div className="flex h-[38px] min-h-[38px] items-center gap-2">
+              <div className="doc-tabs compose-tabs flex-1 min-w-0 h-[38px] min-h-[38px]">
                 {(["body", "footer", "form"] as const).map((tab) => (
                   <button
                     key={tab}
@@ -1482,7 +1482,7 @@ export default function Home() {
             )}
 
             {activeTab === "form" && (
-              <div className="space-y-2">
+              <div className="space-y-2 pt-[42px]">
                 <input
                   className="input"
                   placeholder="Google Forms 링크"
