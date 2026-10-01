@@ -282,8 +282,26 @@ export default function Home() {
   const refreshTopics = useCallback(async () => {
     const t = await api.topics();
     setTopics(t);
-    if (t.length && topicId == null) setTopicId(t[0].id);
-  }, [topicId]);
+
+    // 마지막 작업 메일의 주제를 먼저 복원합니다.
+    // 기본적으로 첫 번째 주제를 선택해 버리면 draft 복원보다 먼저 다른 주제로 진입할 수 있으므로,
+    // localStorage에 저장된 topic_id가 실제 주제 목록에 있을 때는 그 주제를 초기 선택값으로 사용합니다.
+    let restoredTopicId: number | null = null;
+    try {
+      const raw = localStorage.getItem(`emailDraft:${user?.email || ""}`);
+      if (raw) {
+        const d = JSON.parse(raw);
+        const candidate = Number(d?.topic_id);
+        if (Number.isInteger(candidate) && t.some((topic: any) => topic.id === candidate)) {
+          restoredTopicId = candidate;
+        }
+      }
+    } catch {
+      // 무시: 저장된 초안이 없거나 읽을 수 없으면 기본 주제를 사용합니다.
+    }
+
+    if (t.length && topicId == null) setTopicId(restoredTopicId ?? t[0].id);
+  }, [topicId, user?.email]);
 
   useEffect(() => {
     loadMeta().catch(console.error);
@@ -490,7 +508,7 @@ export default function Home() {
       const raw = localStorage.getItem(`emailDraft:${user.email}`);
       if (raw) {
         const d = JSON.parse(raw);
-        if (Number(d.topic_id) === tid && (d.subject || d.plain_body || d.html_body || d.footer_text)) {
+        if (Number(d.topic_id) === tid) {
           setSubject(d.subject || "");
           setPlainBody(d.plain_body || "");
           setHtmlBody(d.html_body || "");
