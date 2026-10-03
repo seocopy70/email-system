@@ -38,6 +38,7 @@ Oracle 서버에서 `backend/`를 실행합니다.
 - `CORS_ORIGINS` — Vercel 프론트 주소
 - `SESSION_SECRET`
 - `SESSION_TTL_HOURS` — 선택, 기본 12시간
+- `SEND_ARCHIVE_DIR` — 발송 기업 엑셀 저장 경로, 운영에서는 `/data/send_archives` 권장
 - `PORT` — 선택, 기본 8000
 
 ### Docker 실행
@@ -51,9 +52,13 @@ sudo docker run -d \
   --name email-api \
   --restart unless-stopped \
   -p 8000:8000 \
+      -v /opt/email-system/send_archives:/data/send_archives \
+      -e SEND_ARCHIVE_DIR=/data/send_archives \
   --env-file .env \
   email-system-api
 ```
+
+발송에 성공한 기업 목록은 날짜·주제·발신자 정보가 포함된 `.xlsx`로 `/opt/email-system/send_archives`에 보관됩니다. 발송 후 같은 파일이 브라우저에서도 다운로드됩니다. Docker 컨테이너를 교체해도 서버 파일을 유지하려면 위와 같이 호스트 디렉터리를 마운트해야 합니다.
 
 ### 동작 확인
 

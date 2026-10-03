@@ -985,7 +985,23 @@ export default function Home() {
         delay_sec: 2,
         allow_over_limit: allowOver,
       });
-      setSendResult(`성공 ${r.sent} · 건너뜀 ${r.skipped} · 실패 ${r.failed}`);
+      let resultMessage = `성공 ${r.sent} · 건너뜀 ${r.skipped} · 실패 ${r.failed}`;
+      if (r.sent_recipients?.length) {
+        const headers = ["회사명", "대표자명", "이메일", "산업분류", "AI_판정", "제목", "발송일시"];
+        const sheet = XLSX.utils.json_to_sheet(r.sent_recipients, { header: headers });
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, sheet, "발송 기업");
+        const safePart = (value: string) =>
+          value.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim().replace(/\s+/g, "_");
+        const date = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul" }).format(new Date());
+        const topicName = topics.find((topic) => topic.id === topicId)?.name || `topic-${topicId}`;
+        const filename =
+          r.archive_filename || `${date}_${safePart(topicName)}_${safePart(user.name)}_${safePart(user.email)}.xlsx`;
+        XLSX.writeFile(workbook, filename);
+        resultMessage += `\n엑셀 다운로드: ${filename}`;
+        resultMessage += r.archive_error ? "\n서버 보관에 실패했습니다." : "\n서버 보관 완료";
+      }
+      setSendResult(resultMessage);
       if (r.errors?.length) setSendResult((s) => s + "\n" + r.errors.join("\n"));
       setStatusMap(await api.topicStatus(topicId));
       setUser((u) => (u ? { ...u, sent_today: u.sent_today + r.sent } : u));

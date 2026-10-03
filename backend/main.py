@@ -8,8 +8,11 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime
+from io import BytesIO
 import mimetypes
 import os
+from pathlib import Path
 import re
 import smtplib
 import socket
@@ -23,9 +26,11 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header as HeaderParam, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from openpyxl import Workbook
 from pydantic import BaseModel, EmailStr, Field
 
 import auth
@@ -44,6 +49,8 @@ GMAIL_DAILY_LIMIT = 500
 MAX_IMAGE_BYTES = 6 * 1024 * 1024
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024        # 첨부파일 1개당 최대
 MAX_ATTACHMENTS_TOTAL_BYTES = 15 * 1024 * 1024  # 첨부파일 합계 최대 (base64 인코딩 후에도 Gmail 25MB 한도 안에 들도록 여유를 둠)
+SEND_ARCHIVE_DIR = Path(os.environ.get("SEND_ARCHIVE_DIR", Path(__file__).resolve().parent / "send_archives"))
+KST = ZoneInfo("Asia/Seoul")
 
 app = FastAPI(title="Email System API", version="1.1.0")
 
@@ -324,6 +331,46 @@ def to_data_uri(data: Optional[bytes]) -> Optional[str]:
 
 def _clean_name(name: str) -> str:
     return re.sub(r"[\x00-\x1f\x7f]+", " ", name or "").strip()[:80]
+
+
+def _safe_filename_part(value: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value or "")).strip(" .")
+    return re.sub(r"\s+", "_", cleaned)[:80] or "unknown"
+
+
+def _build_send_archive(rows: list[dict[str, str]], topic_name: str, sender_name: str,
+                        sender_email: str) -> str:
+    now = datetime.now(KST)
+    filename_base = "_".join((
+        now.strftime("%Y-%m-%d"),
+        _safe_filename_part(topic_name),
+        _safe_filename_part(sender_name),
+        _safe_filename_part(sender_email),
+        now.strftime("%H%M%S"),
+    ))
+    SEND_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    filepath = SEND_ARCHIVE_DIR / f"{filename_base}.xlsx"
+    suffix = 2
+    while filepath.exists():
+        filepath = SEND_ARCHIVE_DIR / f"{filename_base}_{suffix}.xlsx"
+        suffix += 1
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "발송 기업"
+    headers = ["회사명", "대표자명", "이메일", "산업분류", "AI_판정", "제목", "발송일시"]
+    worksheet.append(headers)
+    for row in rows:
+        worksheet.append([row.get(header, "") for header in headers])
+    for excel_row in worksheet.iter_rows():
+        for cell in excel_row:
+            cell.data_type = "s"
+
+    output = BytesIO()
+    workbook.save(output)
+    contents = output.getvalue()
+    filepath.write_bytes(contents)
+    return filepath.name
 
 
 def build_mime(sender_name: str, sender_email: str, to_addr: str, subject: str,
@@ -704,6 +751,11 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
 
     sent = skipped = failed = 0
     errors: list[str] = []
+    sent_recipients: list[dict[str, str]] = []
+    try:
+        topic_name = next((t["name"] for t in db.list_topics() if t["id"] == body.topic_id), f"topic-{body.topic_id}")
+    except Exception:
+        topic_name = f"topic-{body.topic_id}"
     delay = max(0.5, min(float(body.delay_sec), 30.0))
 
     for t in body.targets:
@@ -759,9 +811,21 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
             except smtplib.SMTPServerDisconnected:
                 server = smtp_connect(sender_email, body.sender_password)
                 server.sendmail(sender_email, to_addr, msg.as_string())
-            # DB에는 이미지 바이트 없이 cid 참조 형태의 HTML만 저장 (용량 절약)
-            db.mark_sent(log_id, subj, html)
             sent += 1
+            sent_recipients.append({
+                "회사명": t.회사명,
+                "대표자명": t.대표자명,
+                "이메일": to_addr,
+                "산업분류": t.산업분류,
+                "AI_판정": t.AI_판정,
+                "제목": subj,
+                "발송일시": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+            })
+            try:
+                # DB에는 이미지 바이트 없이 cid 참조 형태의 HTML만 저장 (용량 절약)
+                db.mark_sent(log_id, subj, html)
+            except Exception as e:
+                errors.append(f"DB 이력 저장 실패 ({t.회사명}): {e}")
             time.sleep(delay)
         except Exception as e:
             failed += 1
@@ -777,7 +841,24 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
         server.quit()
     except Exception:
         pass
-    return {"sent": sent, "skipped": skipped, "failed": failed, "errors": errors}
+
+    archive_filename = None
+    archive_error = None
+    if sent_recipients:
+        try:
+            archive_filename = _build_send_archive(sent_recipients, topic_name, sender_name, sender_email)
+        except Exception as e:
+            archive_error = str(e)
+            errors.append(f"서버 엑셀 보관 실패: {e}")
+    return {
+        "sent": sent,
+        "skipped": skipped,
+        "failed": failed,
+        "errors": errors,
+        "sent_recipients": sent_recipients,
+        "archive_filename": archive_filename,
+        "archive_error": archive_error,
+    }
 
 
 if __name__ == "__main__":

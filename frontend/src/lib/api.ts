@@ -97,7 +97,23 @@ export const api = {
     return req<any[]>(`/api/topics/${topicId}/logs${q}`);
   },
   send: (body: any) =>
-    req<{ sent: number; skipped: number; failed: number; errors: string[] }>("/api/send", {
+    req<{
+      sent: number;
+      skipped: number;
+      failed: number;
+      errors: string[];
+      sent_recipients: {
+        회사명: string;
+        대표자명: string;
+        이메일: string;
+        산업분류: string;
+        AI_판정: string;
+        제목: string;
+        발송일시: string;
+      }[];
+      archive_filename: string | null;
+      archive_error: string | null;
+    }>("/api/send", {
       method: "POST",
       body: JSON.stringify(body),
     }),
