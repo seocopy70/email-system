@@ -521,7 +521,8 @@ def topic_status(topic_id: int) -> dict:
     return {r["recipient_id"]: r for r in rows}
 
 
-def claim_send(topic_id: int, recipient_id: int, sender_email: str, sender_name: str):
+def claim_send(topic_id: int, recipient_id: int, sender_email: str, sender_name: str,
+              allow_resend: bool = False):
     """발송 권한 선점(단일 SQL문이라 원자적).
 
     성공 시 log id, 이미 발송됐거나 다른 계정이 진행 중이면 None.
@@ -539,9 +540,10 @@ def claim_send(topic_id: int, recipient_id: int, sender_email: str, sender_name:
                       claimed_at   = excluded.claimed_at
                     WHERE send_log.status = 'failed'
                        OR (send_log.status = 'pending' AND send_log.claimed_at < ?)
+                       OR (send_log.status = 'sent' AND ? = 1)
                     RETURNING id""",
                  [topic_id, recipient_id, sender_email, sender_name, _iso(now),
-                  _iso(now - timedelta(minutes=STALE_PENDING_MIN))])
+                  _iso(now - timedelta(minutes=STALE_PENDING_MIN)), int(bool(allow_resend))])
     return rows[0]["id"] if rows else None
 
 
