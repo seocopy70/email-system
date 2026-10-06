@@ -109,3 +109,11 @@ body {
 .seg button[data-active="true"] {
   @apply bg-white text-ink-900 shadow-sm font-medium;
 }
+
+/* HTML 본문 편집창: Tailwind 기본 초기화가 지운 표 테두리를 border 속성 기준으로 되살림 */
+.wysiwyg-html table[border]:not([border="0"]) td,
+.wysiwyg-html table[border]:not([border="0"]) th {
+  border: 1px solid #9ca3af;
+}
+.wysiwyg-html table { border-collapse: collapse; }
+.wysiwyg-html img { max-width: 100%; height: auto; }

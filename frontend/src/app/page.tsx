@@ -130,6 +130,82 @@ function pickSelectable(items: any[], st: Record<string, any>): Set<string> {
 }
 
 
+// ── HTML 본문 입력창(WYSIWYG) 보조 함수 ─────────────────────────────
+const ESCAPED_TAG_RE = /&lt;\/?[a-z][^&]*?&gt;/i;
+
+// 전체 문서/조각 어느 쪽이든 본문에 넣을 수 있는 HTML만 남긴다 (meta/title/script/link 제거, <style>은 유지)
+function sourceToBodyHtml(src: string): string {
+  const doc = new DOMParser().parseFromString(src, "text/html");
+  doc.querySelectorAll("script,meta,title,link,base").forEach((n) => n.remove());
+  const styles = Array.from(doc.head.querySelectorAll("style")).map((n) => n.outerHTML).join("");
+  return styles + doc.body.innerHTML;
+}
+
+// 소스를 글자로 직접 입력/붙여넣어 &lt;p&gt; 처럼 이스케이프되어 저장된 경우 진짜 HTML로 되돌린다
+function fixEscapedSource(html: string): string {
+  if (!html || !ESCAPED_TAG_RE.test(html)) return html;
+  const rest = html.replace(/<br\s*\/?>/gi, "").replace(/<\/?div[^>]*>/gi, "");
+  if (rest.includes("<")) return html; // 이미 실제 태그가 섞여 있으면 건드리지 않음
+  const withNl = html.replace(/<br\s*\/?>/gi, "\n").replace(/<\/div>\s*<div[^>]*>/gi, "\n").replace(/<\/?div[^>]*>/gi, "");
+  const ta = document.createElement("textarea");
+  ta.innerHTML = withNl;
+  return sourceToBodyHtml(ta.value);
+}
+
+// 편집창 안의 <style>이 앱 전체 화면에 새지 않도록 꺼 두고(media="not all"), 저장할 땐 원래대로 복원
+function neutralizeStyles(el: HTMLElement) {
+  el.querySelectorAll("style:not([data-ed-style])").forEach((st) => {
+    const m = st.getAttribute("media");
+    if (m) st.setAttribute("data-ed-media", m);
+    st.setAttribute("data-ed-style", "1");
+    st.setAttribute("media", "not all");
+  });
+}
+function cleanEditorHtml(el: HTMLElement): string {
+  const c = el.cloneNode(true) as HTMLElement;
+  c.querySelectorAll("style[data-ed-style]").forEach((st) => {
+    const m = st.getAttribute("data-ed-media");
+    if (m) st.setAttribute("media", m);
+    else st.removeAttribute("media");
+    st.removeAttribute("data-ed-media");
+    st.removeAttribute("data-ed-style");
+  });
+  return c.innerHTML;
+}
+
+// 본문 <style>을 편집창 안에서만 적용되도록 선택자 앞에 범위를 붙인다
+function buildScopedCss(html: string, scope: string): string {
+  if (!html || !/<style/i.test(html)) return "";
+  try {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const css = Array.from(doc.querySelectorAll("style")).map((n) => n.textContent || "").join("\n");
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(css);
+    const walk = (rules: CSSRuleList): string =>
+      Array.from(rules)
+        .map((r) => {
+          if (r instanceof CSSStyleRule) {
+            const sel = r.selectorText
+              .split(",")
+              .map((x) => {
+                const t = x.trim();
+                if (/^(html|body|:root)$/i.test(t)) return scope;
+                return scope + " " + t.replace(/^(html|body)\s+/i, "");
+              })
+              .join(",");
+            return `${sel}{${r.style.cssText}}`;
+          }
+          if (r instanceof CSSMediaRule) return `@media ${r.conditionText}{${walk(r.cssRules)}}`;
+          return "";
+        })
+        .join("\n");
+    return walk(sheet.cssRules);
+  } catch {
+    return "";
+  }
+}
+
+
 function RichTextEditor({
   value,
   onChange,
@@ -148,6 +224,16 @@ function RichTextEditor({
   htmlSourceMode?: boolean;
 }) {
   const lastExternalValue = useRef(value);
+  const [scopedCss, setScopedCss] = useState("");
+  const SCOPE = '[data-wysiwyg="html"]';
+
+  function setDom(el: HTMLDivElement, v: string) {
+    const fixed = htmlSourceMode ? fixEscapedSource(v) : v;
+    el.innerHTML = fixed || "";
+    if (htmlSourceMode) neutralizeStyles(el);
+    lastExternalValue.current = fixed;
+    if (fixed !== v) onChange(fixed);
+  }
 
   // contentEditable is managed through the DOM, not React children.
   // This keeps the WYSIWYG DOM stable while the parent re-renders.
@@ -155,22 +241,44 @@ function RichTextEditor({
     const el = editorRef.current;
     if (!el) return;
     if (lastExternalValue.current !== value && document.activeElement !== el) {
-      el.innerHTML = value || "";
-      lastExternalValue.current = value;
+      setDom(el, value);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, editorRef]);
 
   useEffect(() => {
     const el = editorRef.current;
     if (!el) return;
-    el.innerHTML = value || "";
-    lastExternalValue.current = value;
+    setDom(el, value);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorRef]);
 
+  useEffect(() => {
+    setScopedCss(htmlSourceMode ? buildScopedCss(value, SCOPE) : "");
+  }, [value, htmlSourceMode]);
+
   function syncFromDom(el: HTMLDivElement) {
-    const html = el.innerHTML;
+    const html = htmlSourceMode ? cleanEditorHtml(el) : el.innerHTML;
     lastExternalValue.current = html;
     onChange(html);
+  }
+
+  // 글자로 들어온 HTML 소스(직접 입력, 모바일 붙여넣기 등)를 실제 서식으로 바꾼다
+  function normalizeTyped(el: HTMLDivElement) {
+    if (!htmlSourceMode) return;
+    const fixed = fixEscapedSource(el.innerHTML);
+    if (fixed === el.innerHTML) return;
+    el.innerHTML = fixed;
+    neutralizeStyles(el);
+    const sel = window.getSelection();
+    if (sel && document.activeElement === el) {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      r.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    syncFromDom(el);
   }
 
   function command(name: string, arg?: string) {
@@ -189,6 +297,7 @@ function RichTextEditor({
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0 || !el.contains(selection.anchorNode)) {
       el.insertAdjacentHTML("beforeend", html);
+      if (htmlSourceMode) neutralizeStyles(el);
       syncFromDom(el);
       return;
     }
@@ -204,6 +313,7 @@ function RichTextEditor({
     caret.collapse(false);
     selection.addRange(caret);
 
+    if (htmlSourceMode) neutralizeStyles(el);
     syncFromDom(el);
   }
 
@@ -218,6 +328,7 @@ function RichTextEditor({
         <button type="button" className="btn-ghost !px-2 !py-1 text-xs" title="글자 작게" aria-label="글자 작게" onMouseDown={(e) => { e.preventDefault(); command("fontSize", "3"); }}>A−</button>
         {toolbarExtra}
       </div>
+      {scopedCss && <style>{scopedCss}</style>}
       <div
         ref={editorRef}
         contentEditable
@@ -225,27 +336,51 @@ function RichTextEditor({
         role="textbox"
         aria-label={ariaLabel}
         data-placeholder={placeholder || ""}
-        className="input min-h-[390px] max-h-[390px] overflow-y-auto overflow-x-hidden text-lg leading-7 whitespace-pre-wrap focus:outline-none"
+        data-wysiwyg={htmlSourceMode ? "html" : undefined}
+        className={`input min-h-[390px] max-h-[390px] overflow-y-auto overflow-x-hidden text-lg leading-7 focus:outline-none ${
+          htmlSourceMode ? "whitespace-normal wysiwyg-html" : "whitespace-pre-wrap"
+        }`}
         onPaste={(e) => {
           if (!htmlSourceMode) return;
 
           const html = e.clipboardData.getData("text/html");
           const text = e.clipboardData.getData("text/plain");
 
-          // Raw HTML source is parsed into the WYSIWYG DOM instead of being
-          // inserted as literal text. Rich clipboard HTML is preserved too.
+          // HTML 소스 글자는 서식으로 해석해서 넣고, 일반 복사 서식도 그대로 살린다
           if (/<\/?[a-z][^>]*>/i.test(text)) {
             e.preventDefault();
-            insertHtmlAtSelection(text);
+            insertHtmlAtSelection(sourceToBodyHtml(text));
             return;
           }
 
           if (html) {
             e.preventDefault();
-            insertHtmlAtSelection(html);
+            insertHtmlAtSelection(sourceToBodyHtml(html));
           }
         }}
-        onInput={(e) => syncFromDom(e.currentTarget)}
+        onDrop={(e) => {
+          if (!htmlSourceMode) return;
+          const text = e.dataTransfer.getData("text/plain");
+          if (/<\/?[a-z][^>]*>/i.test(text)) {
+            e.preventDefault();
+            insertHtmlAtSelection(sourceToBodyHtml(text));
+          }
+        }}
+        onInput={(e) => {
+          const el = e.currentTarget;
+          const ne = e.nativeEvent as InputEvent;
+          syncFromDom(el);
+          // 한 번에 여러 글자가 들어오는 입력(모바일 붙여넣기·추천 문구 등)은 바로 서식으로 변환
+          if (
+            ne.inputType === "insertFromPaste" ||
+            ne.inputType === "insertFromDrop" ||
+            ne.inputType === "insertReplacementText" ||
+            (ne.inputType === "insertText" && (ne.data || "").length > 1)
+          ) {
+            normalizeTyped(el);
+          }
+        }}
+        onBlur={(e) => normalizeTyped(e.currentTarget)}
       />
     </div>
   );
