@@ -193,7 +193,7 @@ function RichTextEditor({
         onPaste={(e) => {
           if (htmlSourceMode) {
             const text = e.clipboardData.getData("text/plain");
-            if (/<\\/?[a-z][^>]*>/i.test(text)) {
+            if (/<\/?[a-z][^>]*>/i.test(text)) {
               e.preventDefault();
               document.execCommand("insertHTML", false, text);
               const html = e.currentTarget.innerHTML;
