@@ -171,6 +171,7 @@ class SendBody(BaseModel):
     footer_image_b64: Optional[str] = None
     delay_sec: float = 3
     allow_over_limit: bool = False  # Gmail 일일 한도(500건) 초과를 알고도 진행
+    resend_sent: bool = False  # 사용자가 확인한 기존 발송 완료 주소 재발송 허용
     attachments: list[AttachmentItem] = Field(default_factory=list, max_length=10)
     targets: list[SendItem] = Field(max_length=2000)
 
@@ -769,7 +770,10 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
             "AI_판정": t.AI_판정, "이메일": to_addr,
         }
         try:
-            log_id = db.claim_send(body.topic_id, t.recipient_id, sender_email, sender_name)
+            log_id = db.claim_send(
+                body.topic_id, t.recipient_id, sender_email, sender_name,
+                allow_resend=body.resend_sent,
+            )
         except Exception as e:
             errors.append(f"DB: {e}")
             break
