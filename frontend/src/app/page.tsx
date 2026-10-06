@@ -137,6 +137,7 @@ function RichTextEditor({
   editorRef,
   ariaLabel = "서식 입력창",
   toolbarExtra,
+  htmlSourceMode = false,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -144,6 +145,7 @@ function RichTextEditor({
   editorRef: React.RefObject<HTMLDivElement | null>;
   ariaLabel?: string;
   toolbarExtra?: React.ReactNode;
+  htmlSourceMode?: boolean;
 }) {
   const lastExternalValue = useRef(value);
 
@@ -188,6 +190,18 @@ function RichTextEditor({
         aria-label={ariaLabel}
         data-placeholder={placeholder || ""}
         className="input min-h-[390px] max-h-[390px] overflow-y-auto overflow-x-hidden text-lg leading-7 whitespace-pre-wrap focus:outline-none"
+        onPaste={(e) => {
+          if (htmlSourceMode) {
+            const text = e.clipboardData.getData("text/plain");
+            if (/<\\/?[a-z][^>]*>/i.test(text)) {
+              e.preventDefault();
+              document.execCommand("insertHTML", false, text);
+              const html = e.currentTarget.innerHTML;
+              lastExternalValue.current = html;
+              onChange(html);
+            }
+          }
+        }}
         onInput={(e) => {
           const html = e.currentTarget.innerHTML;
           lastExternalValue.current = html;
@@ -914,6 +928,7 @@ export default function Home() {
       return;
     }
     // 이미 발송 완료된 주소를 다시 선택해서 보내려는 경우, 한 번 더 확인
+    let resendSent = false;
     const alreadySentCount = targets.filter((t) => {
       const log = statusMap[String(t.recipient_id)] || statusMap[t.recipient_id];
       return log?.status === "sent";
@@ -924,6 +939,7 @@ export default function Home() {
           "그래도 다시 보낼까요? 같은 사람에게 메일이 한 번 더 갑니다."
       );
       if (!ok) return;
+      resendSent = true;
     }
     // 눌렀을 때 바로 확인: 제목/본문이 비어 있으면 보내지 않는다
     const needText = bodyMode === "text";
@@ -984,6 +1000,7 @@ export default function Home() {
         targets,
         delay_sec: 2,
         allow_over_limit: allowOver,
+        resend_sent: resendSent,
       });
       let resultMessage = `성공 ${r.sent} · 건너뜀 ${r.skipped} · 실패 ${r.failed}`;
       if (r.sent_recipients?.length) {
@@ -1419,6 +1436,7 @@ export default function Home() {
                       onChange={setHtmlBody}
                       placeholder={ex.html_body}
                       editorRef={htmlEditorRef}
+                      htmlSourceMode
                       toolbarExtra={<VarMenu tags={varTagsForBody} onPick={(tag) => insertTag("html", tag)} />}
                     />
                   </div>
