@@ -149,26 +149,62 @@ function RichTextEditor({
 }) {
   const lastExternalValue = useRef(value);
 
+  // contentEditable is managed through the DOM, not React children.
+  // This keeps the WYSIWYG DOM stable while the parent re-renders.
   useEffect(() => {
     const el = editorRef.current;
     if (!el) return;
-    if (document.activeElement !== el && lastExternalValue.current !== value) {
+    if (lastExternalValue.current !== value && document.activeElement !== el) {
       el.innerHTML = value || "";
+      lastExternalValue.current = value;
     }
-    lastExternalValue.current = value;
   }, [value, editorRef]);
 
   useEffect(() => {
     const el = editorRef.current;
-    if (el && el.innerHTML !== value) el.innerHTML = value || "";
-  }, []);
+    if (!el) return;
+    el.innerHTML = value || "";
+    lastExternalValue.current = value;
+  }, [editorRef]);
 
-  function command(name: string, arg?: string) {
-    editorRef.current?.focus();
-    document.execCommand(name, false, arg);
-    const html = editorRef.current?.innerHTML || "";
+  function syncFromDom(el: HTMLDivElement) {
+    const html = el.innerHTML;
     lastExternalValue.current = html;
     onChange(html);
+  }
+
+  function command(name: string, arg?: string) {
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+    document.execCommand(name, false, arg);
+    syncFromDom(el);
+  }
+
+  function insertHtmlAtSelection(html: string) {
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || !el.contains(selection.anchorNode)) {
+      el.insertAdjacentHTML("beforeend", html);
+      syncFromDom(el);
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    range.deleteContents();
+    const fragment = range.createContextualFragment(html);
+    range.insertNode(fragment);
+
+    selection.removeAllRanges();
+    const caret = document.createRange();
+    caret.selectNodeContents(el);
+    caret.collapse(false);
+    selection.addRange(caret);
+
+    syncFromDom(el);
   }
 
   return (
@@ -191,22 +227,25 @@ function RichTextEditor({
         data-placeholder={placeholder || ""}
         className="input min-h-[390px] max-h-[390px] overflow-y-auto overflow-x-hidden text-lg leading-7 whitespace-pre-wrap focus:outline-none"
         onPaste={(e) => {
-          if (htmlSourceMode) {
-            const text = e.clipboardData.getData("text/plain");
-            if (/<\/?[a-z][^>]*>/i.test(text)) {
-              e.preventDefault();
-              document.execCommand("insertHTML", false, text);
-              const html = e.currentTarget.innerHTML;
-              lastExternalValue.current = html;
-              onChange(html);
-            }
+          if (!htmlSourceMode) return;
+
+          const html = e.clipboardData.getData("text/html");
+          const text = e.clipboardData.getData("text/plain");
+
+          // Raw HTML source is parsed into the WYSIWYG DOM instead of being
+          // inserted as literal text. Rich clipboard HTML is preserved too.
+          if (/<\/?[a-z][^>]*>/i.test(text)) {
+            e.preventDefault();
+            insertHtmlAtSelection(text);
+            return;
+          }
+
+          if (html) {
+            e.preventDefault();
+            insertHtmlAtSelection(html);
           }
         }}
-        onInput={(e) => {
-          const html = e.currentTarget.innerHTML;
-          lastExternalValue.current = html;
-          onChange(html);
-        }}
+        onInput={(e) => syncFromDom(e.currentTarget)}
       />
     </div>
   );
