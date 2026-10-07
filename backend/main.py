@@ -10,6 +10,9 @@ from __future__ import annotations
 import base64
 from datetime import datetime
 from io import BytesIO
+import email
+from email import policy
+import imaplib
 import mimetypes
 import os
 from pathlib import Path
@@ -17,6 +20,7 @@ import re
 import smtplib
 import socket
 import ssl
+import threading
 import time
 from email import encoders as email_encoders
 from email.header import Header
@@ -376,7 +380,7 @@ def _build_send_archive(rows: list[dict[str, str]], topic_name: str, sender_name
 
 def build_mime(sender_name: str, sender_email: str, to_addr: str, subject: str,
                html: str, images: list, plain: Optional[str] = None,
-               attachments: Optional[list] = None) -> MIMEMultipart:
+               attachments: Optional[list] = None, tracking_id: Optional[int] = None) -> MIMEMultipart:
     msg = MIMEMultipart("related")
     alt = MIMEMultipart("alternative")
     msg.attach(alt)
@@ -403,9 +407,156 @@ def build_mime(sender_name: str, sender_email: str, to_addr: str, subject: str,
         msg = outer
 
     msg["Subject"] = Header(subject, "utf-8")
+    if tracking_id is not None:
+        msg["X-Email-System-Log-ID"] = str(tracking_id)
+        msg["Message-ID"] = f"<email-system-{tracking_id}@{sender_email.split('@', 1)[-1]}>"
     msg["From"] = formataddr((sender_name, sender_email)) if sender_name else sender_email
     msg["To"] = to_addr
     return msg
+
+
+# ------------------------------------------------------------------ Gmail 반송 자동 확인
+BOUNCE_CHECK_DELAYS = (300, 900)  # 5분 후, 15분 후 재확인
+_BOUNCE_ADDR_RE = re.compile(r"(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b")
+
+
+def _bounce_parts(message):
+    """DSN에서 영구 반송 여부, 실패 주소, 원본 추적 ID를 추출."""
+    log_ids = set()
+    recipients = set()
+    permanent = False
+    diagnostics = []
+
+    def add_address(value):
+        if not value:
+            return
+        for addr in _BOUNCE_ADDR_RE.findall(str(value)):
+            recipients.add(addr.lower())
+
+    for part in message.walk():
+        for header_name in ("X-Email-System-Log-ID", "X-Original-Email-System-Log-ID"):
+            for value in part.get_all(header_name, []):
+                log_ids.update(re.findall(r"\\b\\d+\\b", str(value)))
+        for header_name in ("X-Failed-Recipients", "Final-Recipient", "Original-Recipient"):
+            for value in part.get_all(header_name, []):
+                add_address(value)
+        for header_name in ("Status", "Action", "Diagnostic-Code"):
+            for value in part.get_all(header_name, []):
+                text = str(value or "")
+                diagnostics.append(text)
+                if header_name == "Status" and re.search(r"\\b5\\.\\d+\\.\\d+\\b", text):
+                    permanent = True
+                if header_name == "Action" and text.strip().lower() == "failed":
+                    permanent = True
+
+    raw_text = message.as_string()
+    for value in re.findall(r"(?im)^X-(?:Original-)?Email-System-Log-ID:\\s*(\\d+)", raw_text):
+        log_ids.add(value)
+    for value in re.findall(r"(?im)^X-Failed-Recipients:\\s*(.+)$", raw_text):
+        add_address(value)
+
+    # Gmail의 "Address not found", "does not exist" 류도 영구 실패로 분류한다.
+    low = raw_text.lower()
+    if any(phrase in low for phrase in (
+        "address not found",
+        "email account that you tried to reach does not exist",
+        "user unknown",
+        "recipient address rejected",
+        "mailbox unavailable",
+    )):
+        permanent = True
+
+    return permanent, log_ids, recipients, diagnostics
+
+
+def _check_bounces(sender_email: str, sender_password: str, sent_log_ids: set[int]):
+    """발송 직후 받은 Gmail 반송 메일을 읽어 영구실패 로그를 차단 상태로 바꾼다.
+
+    앱 비밀번호는 DB에 저장하지 않고 이 작업이 끝날 때까지의 메모리에서만 사용한다.
+    """
+    if not sent_log_ids:
+        return
+    mail = None
+    try:
+        mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+        mail.login(sender_email, sender_password)
+        mail.select("INBOX", readonly=True)
+        typ, data = mail.uid("search", None, '(OR FROM "mailer-daemon" FROM "postmaster")')
+        if typ != "OK":
+            return
+        uids = (data[0] or b"").split()
+        # 가장 최근 반송 몇 건만 확인. 한 번의 발송은 최대 2000건이므로 200개로 충분히 좁힌다.
+        for uid in uids[-200:]:
+            typ, msg_data = mail.uid("fetch", uid, "(RFC822)")
+            if typ != "OK":
+                continue
+            raw = next((item[1] for item in msg_data if isinstance(item, tuple) and len(item) > 1), None)
+            if not raw:
+                continue
+            try:
+                message = email.message_from_bytes(raw, policy=policy.default)
+            except Exception:
+                continue
+            permanent, ids, recipients, diagnostics = _bounce_parts(message)
+            if not permanent:
+                continue
+
+            matched = set()
+            for value in ids:
+                try:
+                    lid = int(value)
+                except ValueError:
+                    continue
+                if lid in sent_log_ids:
+                    matched.add(lid)
+
+            # 일부 DSN은 원본 사용자 헤더를 제거하므로 실패 주소를 보조 키로 사용한다.
+            if not matched and recipients:
+                # 현재 발송분의 주소를 DB에서 조회하지 않고, log_id가 가리키는 주소를
+                # 서버에서 다시 확인해 오탐을 줄인다.
+                for lid in sent_log_ids:
+                    try:
+                        row = db.log_detail_for_id(lid)
+                    except Exception:
+                        row = None
+                    if row and str(row.get("recipient_email", "")).lower() in recipients:
+                        matched.add(lid)
+
+            if not matched:
+                continue
+            reason = next((d for d in diagnostics if d), "Gmail 영구 반송")
+            for lid in matched:
+                try:
+                    db.mark_permanent_failed(lid, f"영구 반송: {reason}")
+                except Exception as exc:
+                    print("bounce status update failed:", lid, exc)
+    except Exception as exc:
+        # 반송 확인 실패가 메일 발송 자체를 실패로 만들지는 않는다.
+        print("bounce check failed:", sender_email, exc)
+    finally:
+        if mail is not None:
+            try:
+                mail.logout()
+            except Exception:
+                pass
+
+
+def _schedule_bounce_checks(sender_email: str, sender_password: str, sent_log_ids: list[int]):
+    ids = {int(x) for x in sent_log_ids if x}
+    if not ids:
+        return
+
+    def run_after(delay):
+        def worker():
+            time.sleep(delay)
+            try:
+                _check_bounces(sender_email, sender_password, ids)
+            except Exception as exc:
+                print("scheduled bounce check error:", exc)
+        threading.Thread(target=worker, daemon=True, name="bounce-check").start()
+
+    for delay in BOUNCE_CHECK_DELAYS:
+        run_after(delay)
 
 
 # ------------------------------------------------------------------ 시작 / 공개 엔드포인트
@@ -752,6 +903,7 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
 
     sent = skipped = failed = 0
     errors: list[str] = []
+    sent_log_ids: list[int] = []
     sent_recipients: list[dict[str, str]] = []
     try:
         topic_name = next((t["name"] for t in db.list_topics() if t["id"] == body.topic_id), f"topic-{body.topic_id}")
@@ -809,13 +961,14 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
                     row, body.plain_body, footer_text, sender_name,
                     form_url=body.form_url, include_form=body.include_form,
                 )
-            msg = build_mime(sender_name, sender_email, to_addr, subj, html, images, plain_part, attachment_files)
+            msg = build_mime(sender_name, sender_email, to_addr, subj, html, images, plain_part, attachment_files, tracking_id=log_id)
             try:
                 server.sendmail(sender_email, to_addr, msg.as_string())
             except smtplib.SMTPServerDisconnected:
                 server = smtp_connect(sender_email, body.sender_password)
                 server.sendmail(sender_email, to_addr, msg.as_string())
             sent += 1
+            sent_log_ids.append(log_id)
             sent_recipients.append({
                 "회사명": t.회사명,
                 "대표자명": t.대표자명,
@@ -845,6 +998,9 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
         server.quit()
     except Exception:
         pass
+
+    # 반송 확인은 발송 응답을 기다리게 하지 않고 백그라운드에서 자동 수행한다.
+    _schedule_bounce_checks(sender_email, body.sender_password, sent_log_ids)
 
     archive_filename = None
     archive_error = None
