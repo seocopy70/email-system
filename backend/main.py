@@ -176,6 +176,7 @@ class SendBody(BaseModel):
     delay_sec: float = 3
     allow_over_limit: bool = False  # Gmail 일일 한도(500건) 초과를 알고도 진행
     resend_sent: bool = False  # 사용자가 확인한 기존 발송 완료 주소 재발송 허용
+    source_filename: Optional[str] = None  # 이번 발송에 사용한 Excel 파일명
     attachments: list[AttachmentItem] = Field(default_factory=list, max_length=10)
     targets: list[SendItem] = Field(max_length=2000)
 
@@ -821,8 +822,14 @@ def stats(user: dict = Depends(current_user)):
     return {
         "recipients": db.count_recipients(),
         "sent_today": dict(db.sent_today_by_sender()),
+        "sent_total": db.sent_total(),
+        "sent_total_by_sender": dict(db.sent_total_by_sender()),
         "logs_lite": db.all_log_lite(),
     }
+
+@app.get("/api/log-history")
+def log_history(limit: int = 1000, user: dict = Depends(current_user)):
+    return db.log_history(max(1, min(limit, 2000)))
 
 
 @app.post("/api/preview")
@@ -933,6 +940,7 @@ def send_mail(body: SendBody, user: dict = Depends(current_user)):
             log_id = db.claim_send(
                 body.topic_id, t.recipient_id, sender_email, sender_name,
                 allow_resend=body.resend_sent,
+                source_filename=(body.source_filename or "").strip() or None,
             )
         except Exception as e:
             errors.append(f"DB: {e}")
