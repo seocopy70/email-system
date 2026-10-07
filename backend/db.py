@@ -612,6 +612,15 @@ def log_detail(topic_id: int, sender_email: str = None, limit: int = 200) -> lis
     return out
 
 
+def log_detail_for_id(log_id: int) -> dict | None:
+    rows = _rows("""SELECT l.id, l.recipient_id, l.status, l.permanent_failed,
+                           r.email AS recipient_email
+                    FROM send_log l
+                    JOIN recipients r ON r.id = l.recipient_id
+                    WHERE l.id = ?""", [log_id])
+    return rows[0] if rows else None
+
+
 def get_body(log_id: int) -> str:
     rows = _rows("SELECT body_html FROM send_log WHERE id = ?", [log_id])
     return (rows[0]["body_html"] if rows else "") or ""
