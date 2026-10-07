@@ -117,7 +117,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  stats: () => req<{ recipients: number; sent_today: Record<string, number>; logs_lite: any[] }>("/api/stats"),
+  stats: () => req<{
+    recipients: number;
+    sent_today: Record<string, number>;
+    sent_total: number;
+    sent_total_by_sender: Record<string, number>;
+    logs_lite: any[];
+  }>("/api/stats"),
+  logHistory: (limit = 1000) => req<any[]>(`/api/log-history?limit=${limit}`),
   senders: () => req<any[]>("/api/senders"),
   upsertSender: (body: {
     email: string;
