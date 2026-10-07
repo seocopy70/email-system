@@ -481,13 +481,21 @@ def _check_bounces(sender_email: str, sender_password: str, sent_log_ids: set[in
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
         mail.login(sender_email, sender_password)
-        mail.select("INBOX", readonly=True)
-        typ, data = mail.uid("search", None, '(OR FROM "mailer-daemon" FROM "postmaster")')
-        if typ != "OK":
-            return
-        uids = (data[0] or b"").split()
-        # 가장 최근 반송 몇 건만 확인. 한 번의 발송은 최대 2000건이므로 200개로 충분히 좁힌다.
-        for uid in uids[-200:]:
+        # Gmail은 반송을 받은편지함뿐 아니라 스팸함에도 넣을 수 있으므로 둘 다 확인한다.
+        for folder in ("INBOX", "[Gmail]/Spam"):
+            try:
+                typ, _ = mail.select(folder, readonly=True)
+                if typ != "OK":
+                    continue
+                typ, data = mail.uid("search", None, '(OR FROM "mailer-daemon" FROM "postmaster")')
+                if typ != "OK":
+                    continue
+                uids = (data[0] or b"").split()
+            except Exception:
+                continue
+
+            # 가장 최근 반송 몇 건만 확인. 한 번의 발송은 최대 2000건이므로 200개로 충분히 좁힌다.
+            for uid in uids[-200:]:
             typ, msg_data = mail.uid("fetch", uid, "(RFC822)")
             if typ != "OK":
                 continue
