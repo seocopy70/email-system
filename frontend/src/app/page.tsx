@@ -123,7 +123,7 @@ function pickSelectable(items: any[], st: Record<string, any>): Set<string> {
     items
       .filter((r) => {
         const log = st[String(r.recipient_id)];
-        return !log || log.status === "failed";
+        return !log || (log.status === "failed" && !log.permanent_failed);
       })
       .map((r) => String(r.recipient_id))
   );
@@ -836,6 +836,28 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, topicId]);
 
+  // 발송 후 반송 상태가 서버에서 바뀌면 목록도 자동 갱신한다.
+  useEffect(() => {
+    if (!user || topicId == null || !recipients.length) return;
+    const refreshStatus = async () => {
+      try {
+        const st = await api.topicStatus(topicId);
+        setStatusMap(st);
+        setSelected((prev) => {
+          const next = new Set(prev);
+          for (const id of Array.from(next)) {
+            if (st[id]?.permanent_failed) next.delete(id);
+          }
+          return next;
+        });
+      } catch {
+        // 자동 상태 갱신 실패는 메일 작성/발송을 방해하지 않는다.
+      }
+    };
+    const timer = window.setInterval(refreshStatus, 60_000);
+    return () => window.clearInterval(timer);
+  }, [user, topicId, recipients.length]);
+
   // 커서가 있던 자리에 변수 태그를 끼워 넣고, 태그 바로 뒤로 커서를 되돌린다
   function insertTag(field: "subject" | "plain" | "html" | "footer", tag: string) {
     function applyAt(el: HTMLInputElement | HTMLTextAreaElement | null, value: string, setValue: (v: string) => void) {
@@ -1089,6 +1111,7 @@ export default function Home() {
     }
     const targets = recipients
       .filter((r) => selected.has(String(r.recipient_id)))
+      .filter((r) => !statusMap[String(r.recipient_id)]?.permanent_failed)
       .map((r) => ({
         recipient_id: r.recipient_id,
         이메일: r.이메일,
@@ -1105,7 +1128,7 @@ export default function Home() {
     let resendSent = false;
     const alreadySentCount = targets.filter((t) => {
       const log = statusMap[String(t.recipient_id)] || statusMap[t.recipient_id];
-      return log?.status === "sent";
+      return log?.status === "sent" && !log?.permanent_failed;
     }).length;
     if (alreadySentCount > 0) {
       const ok = window.confirm(
@@ -1827,7 +1850,7 @@ export default function Home() {
                     <button
                       type="button"
                       className="btn-ghost !py-1 !px-2.5"
-                      onClick={() => setSelected(new Set(recipients.map((r) => String(r.recipient_id))))}
+                      onClick={() => setSelected(pickSelectable(recipients, statusMap))}
                     >
                       전체 선택
                     </button>
@@ -1857,8 +1880,9 @@ export default function Home() {
                         {recipients.map((r) => {
                           const log = statusMap[String(r.recipient_id)] || statusMap[r.recipient_id];
                           const st = log?.status || "none";
+                          const permanentFailed = Boolean(log?.permanent_failed);
                           const label =
-                            st === "sent" ? "발송완료" : st === "failed" ? "실패" : st === "pending" ? "발송중" : "미발송";
+                            st === "sent" ? "발송완료" : st === "failed" ? (permanentFailed ? "발송실패" : "실패") : st === "pending" ? "발송중" : "미발송";
                           const rowBg =
                             st === "sent"
                               ? "bg-emerald-50/60"
@@ -1881,6 +1905,8 @@ export default function Home() {
                                 <input
                                   type="checkbox"
                                   checked={selected.has(String(r.recipient_id))}
+                                  disabled={permanentFailed}
+                                  title={permanentFailed ? "영구 반송 주소는 재발송할 수 없습니다." : undefined}
                                   onChange={(e) => {
                                     const next = new Set(selected);
                                     if (e.target.checked) next.add(String(r.recipient_id));
