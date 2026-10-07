@@ -410,24 +410,11 @@ def build_mime(sender_name: str, sender_email: str, to_addr: str, subject: str,
     msg["From"] = formataddr((sender_name, sender_email)) if sender_name else sender_email
     msg["To"] = to_addr
 
-    if attachments:
-        outer = MIMEMultipart("mixed")
-        outer.attach(msg)
-        for filename, data, content_type in attachments:
-            maintype, _, subtype = (content_type or "application/octet-stream").partition("/")
-            part = MIMEBase(maintype or "application", subtype or "octet-stream")
-            part.set_payload(data)
-            email_encoders.encode_base64(part)
-            part.add_header("Content-Disposition", "attachment", filename=filename)
-            outer.attach(part)
-        msg = outer
-
     # 최종 최상위 MIME에 추적 헤더를 붙여 첨부파일이 있어도 DSN에서 식별할 수 있게 한다.
     if tracking_id is not None:
         msg["X-Email-System-Log-ID"] = str(tracking_id)
         msg["Message-ID"] = f"<email-system-{tracking_id}@{sender_email.split('@', 1)[-1]}>"
     return msg
-
 
 # ------------------------------------------------------------------ Gmail 반송 자동 확인
 BOUNCE_CHECK_DELAYS = (300, 900)  # 5분 후, 15분 후 재확인
