@@ -234,6 +234,7 @@ _SCHEMA = [
 _MIGRATIONS = [
     "ALTER TABLE topics ADD COLUMN default_preset TEXT",
     "ALTER TABLE topics ADD COLUMN deleted_at TEXT",
+    "ALTER TABLE send_log ADD COLUMN permanent_failed INTEGER NOT NULL DEFAULT 0",
 ]
 
 _MAIL_TEMPLATES_RECREATE_SQL = (
