@@ -418,7 +418,7 @@ def build_mime(sender_name: str, sender_email: str, to_addr: str, subject: str,
 
 # ------------------------------------------------------------------ Gmail 반송 자동 확인
 BOUNCE_CHECK_DELAYS = (300, 900)  # 5분 후, 15분 후 재확인
-_BOUNCE_ADDR_RE = re.compile(r"(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b")
+_BOUNCE_ADDR_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 
 
 def _bounce_parts(message):
@@ -437,7 +437,7 @@ def _bounce_parts(message):
     for part in message.walk():
         for header_name in ("X-Email-System-Log-ID", "X-Original-Email-System-Log-ID"):
             for value in part.get_all(header_name, []):
-                log_ids.update(re.findall(r"\\b\\d+\\b", str(value)))
+                log_ids.update(re.findall(r"\b\d+\b", str(value)))
         for header_name in ("X-Failed-Recipients", "Final-Recipient", "Original-Recipient"):
             for value in part.get_all(header_name, []):
                 add_address(value)
@@ -445,15 +445,15 @@ def _bounce_parts(message):
             for value in part.get_all(header_name, []):
                 text = str(value or "")
                 diagnostics.append(text)
-                if header_name == "Status" and re.search(r"\\b5\\.\\d+\\.\\d+\\b", text):
+                if header_name == "Status" and re.search(r"\b5\.\d+\.\d+\b", text):
                     permanent = True
                 if header_name == "Action" and text.strip().lower() == "failed":
                     permanent = True
 
     raw_text = message.as_string()
-    for value in re.findall(r"(?im)^X-(?:Original-)?Email-System-Log-ID:\\s*(\\d+)", raw_text):
+    for value in re.findall(r"(?im)^X-(?:Original-)?Email-System-Log-ID:\s*(\d+)", raw_text):
         log_ids.add(value)
-    for value in re.findall(r"(?im)^X-Failed-Recipients:\\s*(.+)$", raw_text):
+    for value in re.findall(r"(?im)^X-Failed-Recipients:\s*(.+)$", raw_text):
         add_address(value)
 
     # Gmail의 "Address not found", "does not exist" 류도 영구 실패로 분류한다.
@@ -513,8 +513,6 @@ def _check_bounces(sender_email: str, sender_password: str, sent_log_ids: set[in
 
             # 일부 DSN은 원본 사용자 헤더를 제거하므로 실패 주소를 보조 키로 사용한다.
             if not matched and recipients:
-                # 현재 발송분의 주소를 DB에서 조회하지 않고, log_id가 가리키는 주소를
-                # 서버에서 다시 확인해 오탐을 줄인다.
                 for lid in sent_log_ids:
                     try:
                         row = db.log_detail_for_id(lid)
