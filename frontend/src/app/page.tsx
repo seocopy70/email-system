@@ -458,6 +458,9 @@ export default function Home() {
   const [bottomTab, setBottomTab] = useState<BottomTab>("list");
   const [stats, setStats] = useState<any>(null);
   const [logs, setLogs] = useState<any[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
+  const [expandedHistoryTopic, setExpandedHistoryTopic] = useState<number | null>(null);
+  const [excelFileName, setExcelFileName] = useState("");
   const [senders, setSenders] = useState<any[]>([]);
   const [newSender, setNewSender] = useState({ email: "", display_name: "", is_admin: false, is_active: true });
 
@@ -588,9 +591,12 @@ export default function Home() {
   }, [user, bottomTab]);
 
   useEffect(() => {
-    if (!user || !topicId || bottomTab !== "logs") return;
-    api.topicLogs(topicId).then(setLogs).catch(console.error);
-  }, [user, topicId, bottomTab]);
+    if (!user || bottomTab !== "logs") return;
+    api.logHistory(1000).then((rows) => {
+      setHistory(rows || []);
+      setExpandedHistoryTopic(null);
+    }).catch(console.error);
+  }, [user, bottomTab]);
 
   async function toggleArchivedTopic(id: number) {
     if (expandedArchivedTopic === id) { setExpandedArchivedTopic(null); return; }
@@ -1096,6 +1102,7 @@ export default function Home() {
       .filter((i) => id_map[i.이메일])
       .map((i) => ({ ...i, recipient_id: id_map[i.이메일] }));
     setRecipients(withIds);
+    setExcelFileName(file.name);
     const st = await api.topicStatus(topicId);
     setStatusMap(st);
     setSelected(pickSelectable(withIds, st));
@@ -1195,6 +1202,7 @@ export default function Home() {
           content_type: a.content_type,
         })),
         targets,
+        source_filename: excelFileName || null,
         delay_sec: 2,
         allow_over_limit: allowOver,
         resend_sent: resendSent,
@@ -1219,7 +1227,10 @@ export default function Home() {
       if (r.errors?.length) setSendResult((s) => s + "\n" + r.errors.join("\n"));
       setStatusMap(await api.topicStatus(topicId));
       setUser((u) => (u ? { ...u, sent_today: u.sent_today + r.sent } : u));
-      if (bottomTab === "logs") setLogs(await api.topicLogs(topicId));
+      if (bottomTab === "logs") {
+        setHistory(await api.logHistory(1000));
+        setLogs(await api.topicLogs(topicId));
+      }
     } catch (e: any) {
       setSendResult(e.message || "발송 오류");
     } finally {
@@ -1844,6 +1855,11 @@ export default function Home() {
                 불러오기
                 <input type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => e.target.files?.[0] && onExcel(e.target.files[0])} />
               </label>
+              {excelFileName && (
+                <div className="rounded-lg border border-ink-200 bg-ink-50 px-3 py-2 text-sm">
+                  현재 발송 파일: <b className="text-ink-900">{excelFileName}</b>
+                </div>
+              )}
               {recipients.length > 0 && (
                 <>
                   <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -1943,9 +1959,21 @@ export default function Home() {
                 <p className="text-ink-500">불러오는 중…</p>
               ) : (
                 <>
-                  <p>
-                    DB 수신자 수: <b>{stats.recipients}</b>
-                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="rounded-lg border border-ink-200 bg-ink-50 px-3 py-2">
+                      <div className="text-xs text-ink-500">DB 수신자 수</div>
+                      <b className="text-lg">{stats.recipients}</b>
+                    </div>
+                    <div className="rounded-lg border border-ink-200 bg-ink-50 px-3 py-2">
+                      <div className="text-xs text-ink-500">오늘 전체 발송</div>
+                      <b className="text-lg">{Object.values(stats.sent_today || {}).reduce((a: number, b: any) => a + Number(b || 0), 0)}</b>
+                    </div>
+                    <div className="rounded-lg border border-ink-200 bg-ink-50 px-3 py-2">
+                      <div className="text-xs text-ink-500">누적 전체 발송</div>
+                      <b className="text-lg">{stats.sent_total ?? 0}</b>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <div className="font-medium mb-1">오늘 계정별 발송</div>
                     <ul className="list-disc pl-5 text-ink-700">
@@ -1957,6 +1985,16 @@ export default function Home() {
                       {!Object.keys(stats.sent_today || {}).length && <li>없음</li>}
                     </ul>
                   </div>
+                  <div>
+                    <div className="font-medium mb-1">누적 계정별 발송</div>
+                    <ul className="list-disc pl-5 text-ink-700">
+                      {Object.entries(stats.sent_total_by_sender || {}).map(([k, v]) => (
+                        <li key={k}>{k}: {String(v)}</li>
+                      ))}
+                      {!Object.keys(stats.sent_total_by_sender || {}).length && <li>없음</li>}
+                    </ul>
+                  </div>
+                  </div>
                 </>
               )}
             </div>
@@ -1964,37 +2002,69 @@ export default function Home() {
 
           {bottomTab === "logs" && (
             <div className="space-y-3">
-              <div className="overflow-auto max-h-80 border border-ink-200 rounded-lg">
-              <table className="w-full text-sm">
-                <thead className="bg-ink-50 sticky top-0">
-                  <tr>
-                    <th className="p-2 text-left">시각</th>
-                    <th className="p-2 text-left">발신</th>
-                    <th className="p-2 text-left">수신</th>
-                    <th className="p-2 text-left">상태</th>
-                    <th className="p-2 text-left">제목</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.map((d) => (
-                    <tr key={d.id} className="border-t border-ink-100">
-                      <td className="p-2 whitespace-nowrap text-xs">{d.sent_at || d.claimed_at || "—"}</td>
-                      <td className="p-2">{d.sender_name || d.sender_email}</td>
-                      <td className="p-2">{d.recipients?.company || d.recipients?.email}</td>
-                      <td className="p-2">{d.status}</td>
-                      <td className="p-2 truncate max-w-[200px]">{d.subject}</td>
-                    </tr>
-                  ))}
-                  {!logs.length && (
-                    <tr>
-                      <td colSpan={5} className="p-4 text-ink-500 text-center">
-                        내역 없음 (주제 선택 후 확인)
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+              {(() => {
+                const groups = history.reduce((acc: Record<string, any>, d: any) => {
+                  const key = String(d.topic_id);
+                  if (!acc[key]) acc[key] = { id: d.topic_id, name: d.topic_name || `주제 ${d.topic_id}`, rows: [] };
+                  acc[key].rows.push(d);
+                  return acc;
+                }, {});
+                const groupList = Object.values(groups) as any[];
+                return (
+                  <div className="space-y-2">
+                    {groupList.map((g) => {
+                      const sentCount = g.rows.filter((d: any) => d.sent_at).length;
+                      const failedCount = g.rows.filter((d: any) => d.status === "failed").length;
+                      const files = Array.from(new Set(g.rows.map((d: any) => d.source_filename).filter(Boolean))) as string[];
+                      const open = expandedHistoryTopic === g.id;
+                      return (
+                        <div key={g.id} className="border border-ink-200 rounded-lg overflow-hidden">
+                          <button type="button" className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-ink-50" onClick={() => setExpandedHistoryTopic(open ? null : g.id)}>
+                            <div className="min-w-0">
+                              <div className="font-medium truncate">{open ? "▼" : "▶"} {g.name}</div>
+                              <div className="text-xs text-ink-500">{g.rows.length}건 · 성공 {sentCount} · 실패 {failedCount}{files.length ? ` · 파일 ${files.length}개` : ""}</div>
+                            </div>
+                          </button>
+                          {open && (
+                            <div className="border-t border-ink-200 overflow-auto">
+                              {files.length > 0 && (
+                                <div className="px-3 py-2 bg-ink-50 text-xs text-ink-600">
+                                  <b>사용한 Excel:</b> {files.join(", ")}
+                                </div>
+                              )}
+                              <table className="w-full text-xs">
+                                <thead className="bg-ink-50">
+                                  <tr>
+                                    <th className="p-2 text-left">시각</th>
+                                    <th className="p-2 text-left">발신</th>
+                                    <th className="p-2 text-left">Excel</th>
+                                    <th className="p-2 text-left">수신</th>
+                                    <th className="p-2 text-left">상태</th>
+                                    <th className="p-2 text-left">제목</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {g.rows.map((d: any) => (
+                                    <tr key={d.id} className="border-t border-ink-100">
+                                      <td className="p-2 whitespace-nowrap">{d.sent_at || d.claimed_at || "—"}</td>
+                                      <td className="p-2">{d.sender_name || d.sender_email}</td>
+                                      <td className="p-2 max-w-[220px] truncate" title={d.source_filename || ""}>{d.source_filename || "—"}</td>
+                                      <td className="p-2">{d.recipients?.company || d.recipients?.email}</td>
+                                      <td className="p-2">{d.status === "failed" && d.permanent_failed ? "발송실패" : d.status}</td>
+                                      <td className="p-2 max-w-[220px] truncate">{d.subject || "—"}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {!groupList.length && <div className="p-4 text-ink-500 text-center border border-ink-200 rounded-lg">발송내역 없음</div>}
+                  </div>
+                );
+              })()}
               {archivedTopics.length > 0 && (
                 <div className="border border-amber-200 rounded-lg bg-amber-50/50">
                   <button type="button" className="w-full flex items-center justify-between px-3 py-2 text-sm text-left" onClick={() => setExpandedArchivedTopic(expandedArchivedTopic === -1 ? null : -1)}>
