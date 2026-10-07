@@ -182,6 +182,7 @@ _SCHEMA = [
         sender_name  TEXT,
         status       TEXT NOT NULL DEFAULT 'pending'
                      CHECK (status IN ('pending','sent','failed')),
+        permanent_failed INTEGER NOT NULL DEFAULT 0,
         subject      TEXT,
         body_html    TEXT,
         error        TEXT,
@@ -391,7 +392,7 @@ def list_archived_topics(owner_email: str = None) -> list:
     return _rows(sql, args)
 
 def archived_topic_logs(topic_id: int, sender_email: str = None, limit: int = 200) -> list:
-    sql = """SELECT l.id, l.status, l.subject, l.sender_email, l.sender_name, l.sent_at,
+    sql = """SELECT l.id, l.status, l.permanent_failed, l.subject, l.sender_email, l.sender_name, l.sent_at,
                     l.claimed_at, l.error, r.email AS r_email, r.company AS r_company,
                     r.ceo AS r_ceo, t.name AS topic_name
              FROM send_log l
@@ -516,7 +517,7 @@ def count_recipients() -> int:
 # ---------------------------------------------------------------- 발송 기록
 def topic_status(topic_id: int) -> dict:
     """{recipient_id: 로그행} — 상태 표시용(본문 제외)."""
-    rows = _rows("""SELECT id, recipient_id, status, sender_email, sender_name, sent_at, claimed_at
+    rows = _rows("""SELECT id, recipient_id, status, permanent_failed, sender_email, sender_name, sent_at, claimed_at
                     FROM send_log WHERE topic_id = ?""", [topic_id])
     return {r["recipient_id"]: r for r in rows}
 
@@ -536,9 +537,10 @@ def claim_send(topic_id: int, recipient_id: int, sender_email: str, sender_name:
                       sender_email = excluded.sender_email,
                       sender_name  = excluded.sender_name,
                       status       = 'pending',
+                      permanent_failed = 0,
                       error        = NULL,
                       claimed_at   = excluded.claimed_at
-                    WHERE send_log.status = 'failed'
+                    WHERE (send_log.status = 'failed' AND send_log.permanent_failed = 0)
                        OR (send_log.status = 'pending' AND send_log.claimed_at < ?)
                        OR (send_log.status = 'sent' AND ? = 1)
                     RETURNING id""",
@@ -561,17 +563,24 @@ def _update_with_retry(sql: str, args: list, tries: int = 3):
 
 def mark_sent(log_id: int, subject: str, body_html: str):
     _update_with_retry(
-        "UPDATE send_log SET status='sent', subject=?, body_html=?, sent_at=?, error=NULL WHERE id=?",
+        "UPDATE send_log SET status='sent', permanent_failed=0, subject=?, body_html=?, sent_at=?, error=NULL WHERE id=?",
         [subject, body_html, _now(), log_id])
 
 
 def mark_failed(log_id: int, error: str):
-    _update_with_retry("UPDATE send_log SET status='failed', error=? WHERE id=?",
+    _update_with_retry("UPDATE send_log SET status='failed', permanent_failed=0, error=? WHERE id=?",
                        [error[:500], log_id])
 
 
+def mark_permanent_failed(log_id: int, error: str):
+    _update_with_retry(
+        "UPDATE send_log SET status='failed', permanent_failed=1, error=? WHERE id=? AND status='sent'",
+        [error[:500], log_id],
+    )
+
+
 def all_log_lite() -> list:
-    return _rows("SELECT id, topic_id, status, sender_email FROM send_log")
+    return _rows("SELECT id, topic_id, status, permanent_failed, sender_email FROM send_log")
 
 
 def sent_today_by_sender() -> Counter:
