@@ -481,6 +481,7 @@ def _check_bounces(sender_email: str, sender_password: str, sent_log_ids: set[in
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
         mail.login(sender_email, sender_password)
+
         # Gmail은 반송을 받은편지함뿐 아니라 스팸함에도 넣을 수 있으므로 둘 다 확인한다.
         for folder in ("INBOX", "[Gmail]/Spam"):
             try:
@@ -496,47 +497,47 @@ def _check_bounces(sender_email: str, sender_password: str, sent_log_ids: set[in
 
             # 가장 최근 반송 몇 건만 확인. 한 번의 발송은 최대 2000건이므로 200개로 충분히 좁힌다.
             for uid in uids[-200:]:
-            typ, msg_data = mail.uid("fetch", uid, "(RFC822)")
-            if typ != "OK":
-                continue
-            raw = next((item[1] for item in msg_data if isinstance(item, tuple) and len(item) > 1), None)
-            if not raw:
-                continue
-            try:
-                message = email.message_from_bytes(raw, policy=policy.default)
-            except Exception:
-                continue
-            permanent, ids, recipients, diagnostics = _bounce_parts(message)
-            if not permanent:
-                continue
-
-            matched = set()
-            for value in ids:
-                try:
-                    lid = int(value)
-                except ValueError:
+                typ, msg_data = mail.uid("fetch", uid, "(RFC822)")
+                if typ != "OK":
                     continue
-                if lid in sent_log_ids:
-                    matched.add(lid)
+                raw = next((item[1] for item in msg_data if isinstance(item, tuple) and len(item) > 1), None)
+                if not raw:
+                    continue
+                try:
+                    message = email.message_from_bytes(raw, policy=policy.default)
+                except Exception:
+                    continue
+                permanent, ids, recipients, diagnostics = _bounce_parts(message)
+                if not permanent:
+                    continue
 
-            # 일부 DSN은 원본 사용자 헤더를 제거하므로 실패 주소를 보조 키로 사용한다.
-            if not matched and recipients:
-                for lid in sent_log_ids:
+                matched = set()
+                for value in ids:
                     try:
-                        row = db.log_detail_for_id(lid)
-                    except Exception:
-                        row = None
-                    if row and str(row.get("recipient_email", "")).lower() in recipients:
+                        lid = int(value)
+                    except ValueError:
+                        continue
+                    if lid in sent_log_ids:
                         matched.add(lid)
 
-            if not matched:
-                continue
-            reason = next((d for d in diagnostics if d), "Gmail 영구 반송")
-            for lid in matched:
-                try:
-                    db.mark_permanent_failed(lid, f"영구 반송: {reason}")
-                except Exception as exc:
-                    print("bounce status update failed:", lid, exc)
+                # 일부 DSN은 원본 사용자 헤더를 제거하므로 실패 주소를 보조 키로 사용한다.
+                if not matched and recipients:
+                    for lid in sent_log_ids:
+                        try:
+                            row = db.log_detail_for_id(lid)
+                        except Exception:
+                            row = None
+                        if row and str(row.get("recipient_email", "")).lower() in recipients:
+                            matched.add(lid)
+
+                if not matched:
+                    continue
+                reason = next((d for d in diagnostics if d), "Gmail 영구 반송")
+                for lid in matched:
+                    try:
+                        db.mark_permanent_failed(lid, f"영구 반송: {reason}")
+                    except Exception as exc:
+                        print("bounce status update failed:", lid, exc)
     except Exception as exc:
         # 반송 확인 실패가 메일 발송 자체를 실패로 만들지는 않는다.
         print("bounce check failed:", sender_email, exc)
