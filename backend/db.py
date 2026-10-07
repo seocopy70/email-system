@@ -183,6 +183,7 @@ _SCHEMA = [
         status       TEXT NOT NULL DEFAULT 'pending'
                      CHECK (status IN ('pending','sent','failed')),
         permanent_failed INTEGER NOT NULL DEFAULT 0,
+        source_filename TEXT,
         subject      TEXT,
         body_html    TEXT,
         error        TEXT,
@@ -235,6 +236,7 @@ _MIGRATIONS = [
     "ALTER TABLE topics ADD COLUMN default_preset TEXT",
     "ALTER TABLE topics ADD COLUMN deleted_at TEXT",
     "ALTER TABLE send_log ADD COLUMN permanent_failed INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE send_log ADD COLUMN source_filename TEXT",
 ]
 
 _MAIL_TEMPLATES_RECREATE_SQL = (
@@ -393,8 +395,9 @@ def list_archived_topics(owner_email: str = None) -> list:
     return _rows(sql, args)
 
 def archived_topic_logs(topic_id: int, sender_email: str = None, limit: int = 200) -> list:
-    sql = """SELECT l.id, l.status, l.permanent_failed, l.subject, l.sender_email, l.sender_name, l.sent_at,
-                    l.claimed_at, l.error, r.email AS r_email, r.company AS r_company,
+    sql = """SELECT l.id, l.status, l.permanent_failed, l.source_filename, l.subject,
+                    l.sender_email, l.sender_name, l.sent_at, l.claimed_at, l.error,
+                    r.email AS r_email, r.company AS r_company,
                     r.ceo AS r_ceo, t.name AS topic_name
              FROM send_log l
              JOIN recipients r ON r.id = l.recipient_id
@@ -524,7 +527,7 @@ def topic_status(topic_id: int) -> dict:
 
 
 def claim_send(topic_id: int, recipient_id: int, sender_email: str, sender_name: str,
-              allow_resend: bool = False):
+              allow_resend: bool = False, source_filename: str = None):
     """발송 권한 선점(단일 SQL문이라 원자적).
 
     성공 시 log id, 이미 발송됐거나 다른 계정이 진행 중이면 None.
@@ -532,12 +535,13 @@ def claim_send(topic_id: int, recipient_id: int, sender_email: str, sender_name:
     """
     now = datetime.now(timezone.utc)
     rows = _rows("""INSERT INTO send_log
-                      (topic_id, recipient_id, sender_email, sender_name, status, claimed_at)
-                    VALUES (?, ?, ?, ?, 'pending', ?)
+                      (topic_id, recipient_id, sender_email, sender_name, status, source_filename, claimed_at)
+                    VALUES (?, ?, ?, ?, 'pending', ?, ?)
                     ON CONFLICT (topic_id, recipient_id) DO UPDATE SET
                       sender_email = excluded.sender_email,
                       sender_name  = excluded.sender_name,
                       status       = 'pending',
+                      source_filename = excluded.source_filename,
                       permanent_failed = 0,
                       error        = NULL,
                       claimed_at   = excluded.claimed_at
@@ -545,7 +549,7 @@ def claim_send(topic_id: int, recipient_id: int, sender_email: str, sender_name:
                        OR (send_log.status = 'pending' AND send_log.claimed_at < ?)
                        OR (send_log.status = 'sent' AND ? = 1)
                     RETURNING id""",
-                 [topic_id, recipient_id, sender_email, sender_name, _iso(now),
+                 [topic_id, recipient_id, sender_email, sender_name, source_filename, _iso(now),
                   _iso(now - timedelta(minutes=STALE_PENDING_MIN)), int(bool(allow_resend))])
     return rows[0]["id"] if rows else None
 
@@ -587,16 +591,29 @@ def all_log_lite() -> list:
 def sent_today_by_sender() -> Counter:
     start_kst = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
     rows = _rows("""SELECT sender_email, COUNT(*) AS n FROM send_log
-                    WHERE status = 'sent' AND sent_at >= ? GROUP BY sender_email""",
+                    WHERE sent_at IS NOT NULL AND sent_at >= ? GROUP BY sender_email""",
                  [_iso(start_kst)])
     return Counter({r["sender_email"]: r["n"] for r in rows})
 
 
+def sent_total_by_sender() -> Counter:
+    rows = _rows("""SELECT sender_email, COUNT(*) AS n FROM send_log
+                    WHERE sent_at IS NOT NULL GROUP BY sender_email""")
+    return Counter({r["sender_email"]: r["n"] for r in rows})
+
+
+def sent_total() -> int:
+    return int(_rows("SELECT COUNT(*) AS n FROM send_log WHERE sent_at IS NOT NULL")[0]["n"])
+
+
 def log_detail(topic_id: int, sender_email: str = None, limit: int = 200) -> list:
-    sql = """SELECT l.id, l.status, l.subject, l.sender_email, l.sender_name, l.sent_at,
-                    l.claimed_at, l.error,
-                    r.email AS r_email, r.company AS r_company, r.ceo AS r_ceo
-             FROM send_log l JOIN recipients r ON r.id = l.recipient_id
+    sql = """SELECT l.id, l.status, l.permanent_failed, l.source_filename, l.subject,
+                    l.sender_email, l.sender_name, l.sent_at, l.claimed_at, l.error,
+                    r.email AS r_email, r.company AS r_company, r.ceo AS r_ceo,
+                    t.name AS topic_name
+             FROM send_log l
+             JOIN recipients r ON r.id = l.recipient_id
+             JOIN topics t ON t.id = l.topic_id
              WHERE l.topic_id = ?"""
     args = [topic_id]
     if sender_email:
@@ -606,6 +623,24 @@ def log_detail(topic_id: int, sender_email: str = None, limit: int = 200) -> lis
     args.append(limit)
     out = []
     for r in _rows(sql, args):
+        r["recipients"] = {"email": r.pop("r_email"), "company": r.pop("r_company"),
+                           "ceo": r.pop("r_ceo")}
+        out.append(r)
+    return out
+
+
+def log_history(limit: int = 1000) -> list:
+    rows = _rows("""SELECT l.id, l.topic_id, t.name AS topic_name, l.status,
+                           l.permanent_failed, l.source_filename, l.subject,
+                           l.sender_email, l.sender_name, l.sent_at, l.claimed_at, l.error,
+                           r.email AS r_email, r.company AS r_company, r.ceo AS r_ceo
+                    FROM send_log l
+                    JOIN topics t ON t.id = l.topic_id
+                    JOIN recipients r ON r.id = l.recipient_id
+                    ORDER BY COALESCE(l.sent_at, l.claimed_at) DESC, l.id DESC
+                    LIMIT ?""", [max(1, min(int(limit), 2000))])
+    out = []
+    for r in rows:
         r["recipients"] = {"email": r.pop("r_email"), "company": r.pop("r_company"),
                            "ceo": r.pop("r_ceo")}
         out.append(r)
